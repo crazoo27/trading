@@ -1,0 +1,278 @@
+//@version=5
+// GoldPanel (TradingView) - panel analisa XAUUSD
+// Sesi Asia/London/NY, killzone, Asia range, kotak candle HTF, candle timer,
+// dan OmniScore: skor confluence 6 faktor + cadangan Entry/SL/TP.
+// Analisa sahaja. Bukan nasihat kewangan.
+indicator("Gold Panel", overlay = true, max_boxes_count = 500, max_lines_count = 300, max_labels_count = 300)
+
+// ================= INPUT =================
+grpP      = "Panel"
+panelPos  = input.string("Kanan atas", "Kedudukan panel", options = ["Kanan atas", "Kiri atas", "Kanan bawah", "Kiri bawah"], group = grpP)
+panelSize = input.string("Kecil", "Saiz tulisan", options = ["Kecil", "Biasa"], group = grpP)
+
+grpS     = "Gaya trading"
+preset   = input.string("Intraday (M15)", "Preset", options = ["Scalping (M5)", "Intraday (M15)", "Swing (H1)"], group = grpS)
+minScore = input.int(3, "Skor minimum (dari 6)", minval = 1, maxval = 6, group = grpS)
+rr1      = input.float(1.0, "TP1 (x risiko)", step = 0.5, group = grpS)
+rr2      = input.float(2.0, "TP2 (x risiko)", step = 0.5, group = grpS)
+
+grpT          = "Sesi (masa GMT)"
+showSes       = input.bool(true, "Kotak sesi Asia / London / NY", group = grpT)
+sesAsia       = input.session("0000-0700", "Asia", group = grpT)
+sesLon        = input.session("0700-1600", "London", group = grpT)
+sesNY         = input.session("1200-2100", "New York", group = grpT)
+showKZ        = input.bool(true, "Killzone", group = grpT)
+kzLon         = input.session("0700-1000", "London Killzone", group = grpT)
+kzNY          = input.session("1200-1500", "NY Killzone", group = grpT)
+showAsiaLines = input.bool(true, "Garisan Asia high / low", group = grpT)
+
+grpH     = "Candle HTF"
+showHTF  = input.bool(true, "Kotak candle HTF", group = grpH)
+htf      = input.timeframe("240", "Timeframe HTF", group = grpH)
+htfCount = input.int(10, "Bilangan candle HTF", minval = 1, maxval = 50, group = grpH)
+
+grpX      = "Lain-lain"
+showPlan  = input.bool(true, "Garisan Entry / SL / TP", group = grpX)
+showTimer = input.bool(true, "Candle timer", group = grpX)
+showArrow = input.bool(true, "Anak panah bila signal baru", group = grpX)
+
+// ================= WARNA =================
+cBg     = color.new(#071020, 5)
+cBorder = #265CAA
+cTxt    = #C8D7EB
+cDim    = #7387A5
+cAcc    = #2C8CF0
+cUp     = #46D282
+cDn     = #F05A5A
+cGold   = #E6BE50
+
+// ================= PRESET =================
+sigTF   = preset == "Scalping (M5)" ? "5" : preset == "Swing (H1)" ? "60" : "15"
+atrMult = preset == "Scalping (M5)" ? 1.0 : preset == "Swing (H1)" ? 2.0 : 1.5
+
+// ================= DATA (bar yang dah tutup, tak repaint) =================
+f_sig() =>
+    e20 = ta.ema(close, 20)
+    e50 = ta.ema(close, 50)
+    r   = ta.rsi(close, 14)
+    [m, s, _] = ta.macd(close, 12, 26, 9)
+    a   = ta.atr(14)
+    [e20[1], e50[1], r[1], m[1], s[1], a[1], ta.sma(a, 50)[1], close[1], ta.highest(high, 20)[2], ta.lowest(low, 20)[2]]
+
+[e20, e50, rsi, macdM, macdS, atrV, atrAvg, c1, hi20, lo20] = request.security(syminfo.tickerid, sigTF, f_sig(), lookahead = barmerge.lookahead_on)
+[htfC, htfE] = request.security(syminfo.tickerid, htf, [close[1], ta.ema(close, 50)[1]], lookahead = barmerge.lookahead_on)
+
+// ================= SESI =================
+inAsia  = not na(time(timeframe.period, sesAsia, "GMT"))
+inLon   = not na(time(timeframe.period, sesLon, "GMT"))
+inNY    = not na(time(timeframe.period, sesNY, "GMT"))
+inKZLon = not na(time(timeframe.period, kzLon, "GMT"))
+inKZNY  = not na(time(timeframe.period, kzNY, "GMT"))
+
+f_sesBox(inS, show, col, txt) =>
+    var box b = na
+    var float hi = na
+    var float lo = na
+    if inS and not inS[1]
+        hi := high
+        lo := low
+        if show
+            b := box.new(time, hi, time_close, lo, xloc = xloc.bar_time, border_color = col, bgcolor = color.new(col, 93), text = txt, text_size = size.tiny, text_color = col, text_halign = text.align_left, text_valign = text.align_top)
+        else
+            b := na
+    else if inS
+        hi := math.max(hi, high)
+        lo := math.min(lo, low)
+        if not na(b)
+            box.set_top(b, hi)
+            box.set_bottom(b, lo)
+            box.set_right(b, time_close)
+    inS
+
+f_sesBox(inAsia, showSes, #5A5AC8, "ASIA")
+f_sesBox(inLon, showSes, #3CAA78, "LONDON")
+f_sesBox(inNY, showSes, #D27846, "NEW YORK")
+
+bgcolor(showKZ and (inKZLon or inKZNY) ? color.new(#8C50C8, 90) : na, title = "Killzone")
+
+// ================= ASIA RANGE =================
+var float asiaHi = na
+var float asiaLo = na
+var line  aHL = na
+var line  aLL = na
+var label aHLb = na
+var label aLLb = na
+if inAsia and not inAsia[1]
+    asiaHi := high
+    asiaLo := low
+    if showAsiaLines
+        aHL  := line.new(time, high, time + 86400000, high, xloc = xloc.bar_time, color = cGold, style = line.style_dashed)
+        aLL  := line.new(time, low, time + 86400000, low, xloc = xloc.bar_time, color = cGold, style = line.style_dashed)
+        aHLb := label.new(time, high, "ASIA HIGH", xloc = xloc.bar_time, style = label.style_label_lower_left, color = color.new(color.black, 100), textcolor = cGold, size = size.tiny)
+        aLLb := label.new(time, low, "ASIA LOW", xloc = xloc.bar_time, style = label.style_label_upper_left, color = color.new(color.black, 100), textcolor = cGold, size = size.tiny)
+    else
+        aHL  := na
+        aLL  := na
+        aHLb := na
+        aLLb := na
+else if inAsia
+    asiaHi := math.max(asiaHi, high)
+    asiaLo := math.min(asiaLo, low)
+    if not na(aHL)
+        line.set_y1(aHL, asiaHi)
+        line.set_y2(aHL, asiaHi)
+        line.set_y1(aLL, asiaLo)
+        line.set_y2(aLL, asiaLo)
+        label.set_y(aHLb, asiaHi)
+        label.set_y(aLLb, asiaLo)
+
+// ================= KOTAK CANDLE HTF =================
+htfT   = time(htf)
+htfSec = timeframe.in_seconds(htf)
+htfEnd = htfT + htfSec * 1000
+newHTF = ta.change(htfT) != 0
+canHTF = timeframe.in_seconds(timeframe.period) < htfSec
+
+var box[] wBoxes = array.new_box()
+var box[] bBoxes = array.new_box()
+var float ho = na
+var float hh = na
+var float hl = na
+var box   wb = na
+var box   bb = na
+if showHTF and canHTF
+    if newHTF
+        ho := open
+        hh := high
+        hl := low
+        wb := box.new(htfT, hh, htfEnd, hl, xloc = xloc.bar_time, border_style = line.style_dotted, bgcolor = color.new(color.black, 100))
+        bb := box.new(htfT, math.max(ho, close), htfEnd, math.min(ho, close), xloc = xloc.bar_time, bgcolor = color.new(color.black, 100))
+        array.push(wBoxes, wb)
+        array.push(bBoxes, bb)
+        if array.size(wBoxes) > htfCount
+            box.delete(array.shift(wBoxes))
+            box.delete(array.shift(bBoxes))
+    else
+        hh := math.max(hh, high)
+        hl := math.min(hl, low)
+    if not na(wb)
+        hcol = close >= ho ? #3CAA6E : #C85050
+        box.set_top(wb, hh)
+        box.set_bottom(wb, hl)
+        box.set_border_color(wb, hcol)
+        box.set_top(bb, math.max(ho, close))
+        box.set_bottom(bb, math.min(ho, close))
+        box.set_border_color(bb, hcol)
+
+// ================= OMNISCORE =================
+f1 = htfC > htfE ? 1 : htfC < htfE ? -1 : 0
+f2 = e20 > e50 ? 1 : e20 < e50 ? -1 : 0
+f3 = rsi > 55 ? 1 : rsi < 45 ? -1 : 0
+f4 = macdM > macdS ? 1 : macdM < macdS ? -1 : 0
+rng = hi20 - lo20
+pos = rng > 0 ? (c1 - lo20) / rng : 0.5
+f5 = pos >= 0.66 ? 1 : pos <= 0.33 ? -1 : 0
+f6 = na(asiaHi) ? 0 : close > asiaHi ? 1 : close < asiaLo ? -1 : 0
+total = f1 + f2 + f3 + f4 + f5 + f6
+
+dir  = total >= minScore ? 1 : total <= -minScore ? -1 : 0
+risk = atrV * atrMult
+entry = close
+sl  = dir == 1 ? entry - risk : entry + risk
+tp1 = dir == 1 ? entry + risk * rr1 : entry - risk * rr1
+tp2 = dir == 1 ? entry + risk * rr2 : entry - risk * rr2
+
+newBuy  = dir == 1 and dir[1] != 1
+newSell = dir == -1 and dir[1] != -1
+plotshape(showArrow and newBuy, "Signal BELI", shape.triangleup, location.belowbar, cUp, size = size.tiny)
+plotshape(showArrow and newSell, "Signal JUAL", shape.triangledown, location.abovebar, cDn, size = size.tiny)
+alertcondition(newBuy, "GoldPanel: BELI", "GoldPanel: skor confluence BELI pada {{ticker}} harga {{close}}")
+alertcondition(newSell, "GoldPanel: JUAL", "GoldPanel: skor confluence JUAL pada {{ticker}} harga {{close}}")
+
+// ================= GARISAN PLAN =================
+var line[]  planL  = array.new_line()
+var label[] planLb = array.new_label()
+if barstate.islast
+    for l in planL
+        line.delete(l)
+    for lb in planLb
+        label.delete(lb)
+    array.clear(planL)
+    array.clear(planLb)
+    if showPlan and dir != 0
+        lv = array.from(entry, sl, tp1, tp2)
+        nm = array.from("ENTRY", "SL", "TP1", "TP2")
+        cl = array.from(color.white, cDn, cUp, cUp)
+        for i = 0 to 3
+            y = array.get(lv, i)
+            c = array.get(cl, i)
+            array.push(planL, line.new(bar_index, y, bar_index + 20, y, color = c, style = i == 0 ? line.style_solid : line.style_dashed, width = i == 0 ? 2 : 1))
+            array.push(planLb, label.new(bar_index + 20, y, array.get(nm, i) + " " + str.tostring(y, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.small))
+
+// ================= TIMER =================
+f_fmt(ms) =>
+    s = math.max(0, int(ms / 1000))
+    h = int(s / 3600)
+    m = int((s % 3600) / 60)
+    sec = s % 60
+    (h > 0 ? str.tostring(h) + ":" : "") + str.format("{0,number,00}:{1,number,00}", m, sec)
+
+var label tl = na
+if barstate.islast
+    label.delete(tl)
+    if showTimer
+        tl := label.new(bar_index + 3, close, "<  " + f_fmt(time_close - timenow) + "   |   HTF " + f_fmt(htfEnd - timenow), style = label.style_none, textcolor = cTxt, size = size.small)
+
+// ================= PANEL =================
+f_pos(p) =>
+    p == "Kiri atas" ? position.top_left : p == "Kanan bawah" ? position.bottom_right : p == "Kiri bawah" ? position.bottom_left : position.top_right
+
+f_fac(v) =>
+    v > 0 ? "▲ Bullish" : v < 0 ? "▼ Bearish" : "■ Neutral"
+
+f_facCol(v) =>
+    v > 0 ? cUp : v < 0 ? cDn : cDim
+
+f_pts(d) =>
+    str.tostring(math.round(math.abs(d) / syminfo.mintick)) + " pts"
+
+ts = panelSize == "Kecil" ? size.tiny : size.small
+var table tb = table.new(f_pos(panelPos), 2, 16, bgcolor = cBg, frame_color = cBorder, frame_width = 1, border_color = color.new(cBorder, 60), border_width = 1)
+
+if barstate.islast
+    dirTxt = dir == 1 ? "▲ BELI" : dir == -1 ? "▼ JUAL" : "■ TUNGGU"
+    dirCol = dir == 1 ? cUp : dir == -1 ? cDn : cDim
+    table.cell(tb, 0, 0, "GOLD PANEL", text_color = color.white, text_size = ts, text_halign = text.align_left, bgcolor = #0C244A)
+    table.cell(tb, 1, 0, preset, text_color = cDim, text_size = ts, text_halign = text.align_right, bgcolor = #0C244A)
+    table.cell(tb, 0, 1, dirTxt, text_color = dirCol, text_size = size.normal, text_halign = text.align_left)
+    table.cell(tb, 1, 1, (total > 0 ? "+" : "") + str.tostring(total) + " / 6", text_color = dirCol, text_size = size.normal, text_halign = text.align_right)
+
+    names = array.from("Trend HTF (EMA50)", "EMA20 vs EMA50", "RSI(14)", "MACD", "Julat 20 bar", "Asia breakout")
+    vals  = array.from(f1, f2, f3, f4, f5, f6)
+    for i = 0 to 5
+        v = array.get(vals, i)
+        table.cell(tb, 0, 2 + i, array.get(names, i), text_color = cTxt, text_size = ts, text_halign = text.align_left)
+        table.cell(tb, 1, 2 + i, f_fac(v), text_color = f_facCol(v), text_size = ts, text_halign = text.align_right)
+
+    hasSig = dir != 0
+    table.cell(tb, 0, 8, "ENTRY", text_color = cDim, text_size = ts, text_halign = text.align_left)
+    table.cell(tb, 1, 8, hasSig ? str.tostring(entry, format.mintick) : "-", text_color = color.white, text_size = ts, text_halign = text.align_right)
+    table.cell(tb, 0, 9, "STOP LOSS", text_color = cDim, text_size = ts, text_halign = text.align_left)
+    table.cell(tb, 1, 9, hasSig ? str.tostring(sl, format.mintick) + "  (" + f_pts(entry - sl) + ")" : "-", text_color = cDn, text_size = ts, text_halign = text.align_right)
+    table.cell(tb, 0, 10, "TP1", text_color = cDim, text_size = ts, text_halign = text.align_left)
+    table.cell(tb, 1, 10, hasSig ? str.tostring(tp1, format.mintick) + "  (" + f_pts(tp1 - entry) + ")" : "-", text_color = cUp, text_size = ts, text_halign = text.align_right)
+    table.cell(tb, 0, 11, "TP2", text_color = cDim, text_size = ts, text_halign = text.align_left)
+    table.cell(tb, 1, 11, hasSig ? str.tostring(tp2, format.mintick) + "  (" + f_pts(tp2 - entry) + ")" : "-", text_color = cUp, text_size = ts, text_halign = text.align_right)
+
+    sesTxt = (inAsia ? "Asia " : "") + (inLon ? "London " : "") + (inNY ? "NY " : "") + (inKZLon ? "[London KZ]" : "") + (inKZNY ? "[NY KZ]" : "")
+    table.cell(tb, 0, 12, "Sesi aktif", text_color = cDim, text_size = ts, text_halign = text.align_left)
+    table.cell(tb, 1, 12, sesTxt == "" ? "Lengang" : sesTxt, text_color = cTxt, text_size = ts, text_halign = text.align_right)
+    table.cell(tb, 0, 13, "Asia H / L", text_color = cDim, text_size = ts, text_halign = text.align_left)
+    table.cell(tb, 1, 13, na(asiaHi) ? "-" : str.tostring(asiaHi, format.mintick) + " / " + str.tostring(asiaLo, format.mintick), text_color = cGold, text_size = ts, text_halign = text.align_right)
+
+    vr = atrAvg > 0 ? atrV / atrAvg : 1.0
+    volTxt = vr > 1.3 ? "TINGGI" : vr < 0.7 ? "RENDAH" : "NORMAL"
+    table.cell(tb, 0, 14, "Volatiliti (ATR)", text_color = cDim, text_size = ts, text_halign = text.align_left)
+    table.cell(tb, 1, 14, volTxt + "  " + str.tostring(vr, "#.##") + "x", text_color = vr > 1.3 ? cDn : vr < 0.7 ? cDim : cUp, text_size = ts, text_halign = text.align_right)
+    table.cell(tb, 0, 15, "Candle HTF tutup", text_color = cDim, text_size = ts, text_halign = text.align_left)
+    table.cell(tb, 1, 15, f_fmt(htfEnd - timenow), text_color = cTxt, text_size = ts, text_halign = text.align_right)

@@ -35,6 +35,19 @@ Signal **ditahan** 30 minit sebelum dan selepas news USD impak tinggi.
 - `TP1` / `TP2` dalam gandaan risiko (default 1R / 2R)
 - `Tahan signal +/- minit sekitar news` (default 30)
 
+## GoldPanel versi TradingView (untuk guna dari phone)
+
+Fail: `tradingview/GoldPanel.pine` (Pine Script v5)
+
+Fungsi sama macam versi MT5 (sesi, killzone, Asia range, kotak candle H4, timer, OmniScore + Entry/SL/TP),
+tapi panel ditunjuk sebagai jadual di penjuru chart. Tambahan: anak panah bila signal baru, dan alert BELI/JUAL ke phone.
+News tak termasuk sebab Pine Script tak boleh baca kalendar ekonomi. Guna setting chart TradingView → Events.
+
+Cara pasang (dari phone):
+1. Buka **tradingview.com** dalam Chrome/Safari, log masuk, tukar ke **Desktop site**
+2. Buka chart → **Pine Editor** (bawah) → padam semua code → paste isi `GoldPanel.pine` → **Save** → **Add to chart**
+3. Buka app TradingView → chart XAUUSD → **Indicators** → **My scripts** → **Gold Panel**
+
 ### Amaran
 
 Ni alat analisa, bukan mesin duit. Tak ada indicator yang menang 80% secara konsisten dalam semua keadaan market.
