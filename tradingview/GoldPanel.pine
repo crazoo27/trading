@@ -7,34 +7,35 @@ indicator("Gold Panel", overlay = true, max_boxes_count = 500, max_lines_count =
 
 // ================= INPUT =================
 grpP      = "Panel"
-panelPos  = input.string("Kanan atas", "Kedudukan panel", options = ["Kanan atas", "Kiri atas", "Kanan bawah", "Kiri bawah"], group = grpP)
-panelSize = input.string("Kecil", "Saiz tulisan", options = ["Kecil", "Biasa"], group = grpP)
+panelPos  = input.string("Kanan atas", "Kedudukan panel", options = ["Kanan atas", "Kiri atas", "Kanan bawah", "Kiri bawah"], display = display.none, group = grpP)
+panelSize = input.string("Kecil", "Saiz tulisan", options = ["Kecil", "Biasa"], display = display.none, group = grpP)
+panelMode = input.string("Penuh", "Mod panel", options = ["Penuh", "Ringkas"], tooltip = "Ringkas = signal, skor dan Entry/SL/TP sahaja. Sesuai untuk skrin phone.", display = display.none, group = grpP)
 
 grpS     = "Gaya trading"
-preset   = input.string("Intraday (M15)", "Preset", options = ["Scalping (M5)", "Intraday (M15)", "Swing (H1)"], group = grpS)
-minScore = input.int(3, "Skor minimum (dari 6)", minval = 1, maxval = 6, group = grpS)
-rr1      = input.float(1.0, "TP1 (x risiko)", step = 0.5, group = grpS)
-rr2      = input.float(2.0, "TP2 (x risiko)", step = 0.5, group = grpS)
+preset   = input.string("Intraday (M15)", "Preset", options = ["Scalping (M5)", "Intraday (M15)", "Swing (H1)"], display = display.none, group = grpS)
+minScore = input.int(3, "Skor minimum (dari 6)", minval = 1, maxval = 6, display = display.none, group = grpS)
+rr1      = input.float(1.0, "TP1 (x risiko)", step = 0.5, display = display.none, group = grpS)
+rr2      = input.float(2.0, "TP2 (x risiko)", step = 0.5, display = display.none, group = grpS)
 
 grpT          = "Sesi (masa GMT)"
-showSes       = input.bool(true, "Kotak sesi Asia / London / NY", group = grpT)
-sesAsia       = input.session("0000-0700", "Asia", group = grpT)
-sesLon        = input.session("0700-1600", "London", group = grpT)
-sesNY         = input.session("1200-2100", "New York", group = grpT)
-showKZ        = input.bool(true, "Killzone", group = grpT)
-kzLon         = input.session("0700-1000", "London Killzone", group = grpT)
-kzNY          = input.session("1200-1500", "NY Killzone", group = grpT)
-showAsiaLines = input.bool(true, "Garisan Asia high / low", group = grpT)
+showSes       = input.bool(true, "Kotak sesi Asia / London / NY", display = display.none, group = grpT)
+sesAsia       = input.session("0000-0700", "Asia", display = display.none, group = grpT)
+sesLon        = input.session("0700-1600", "London", display = display.none, group = grpT)
+sesNY         = input.session("1200-2100", "New York", display = display.none, group = grpT)
+showKZ        = input.bool(true, "Killzone", display = display.none, group = grpT)
+kzLon         = input.session("0700-1000", "London Killzone", display = display.none, group = grpT)
+kzNY          = input.session("1200-1500", "NY Killzone", display = display.none, group = grpT)
+showAsiaLines = input.bool(true, "Garisan Asia high / low", display = display.none, group = grpT)
 
 grpH     = "Candle HTF"
-showHTF  = input.bool(true, "Kotak candle HTF", group = grpH)
-htf      = input.timeframe("240", "Timeframe HTF", group = grpH)
-htfCount = input.int(10, "Bilangan candle HTF", minval = 1, maxval = 50, group = grpH)
+showHTF  = input.bool(true, "Kotak candle HTF", display = display.none, group = grpH)
+htf      = input.timeframe("240", "Timeframe HTF", display = display.none, group = grpH)
+htfCount = input.int(10, "Bilangan candle HTF", minval = 1, maxval = 50, display = display.none, group = grpH)
 
 grpX      = "Lain-lain"
-showPlan  = input.bool(true, "Garisan Entry / SL / TP", group = grpX)
-showTimer = input.bool(true, "Candle timer", group = grpX)
-showArrow = input.bool(true, "Anak panah bila signal baru", group = grpX)
+showPlan  = input.bool(true, "Garisan Entry / SL / TP", display = display.none, group = grpX)
+showTimer = input.bool(true, "Candle timer", display = display.none, group = grpX)
+showArrow = input.bool(true, "Anak panah bila signal baru", display = display.none, group = grpX)
 
 // ================= WARNA =================
 cBg     = color.new(#071020, 5)
@@ -217,11 +218,12 @@ f_fmt(ms) =>
     sec = s % 60
     (h > 0 ? str.tostring(h) + ":" : "") + str.format("{0,number,00}:{1,number,00}", m, sec)
 
+// Label kecil sebelah harga: masa tinggal untuk candle semasa sahaja
 var label tl = na
 if barstate.islast
     label.delete(tl)
     if showTimer
-        tl := label.new(bar_index + 3, close, "<  " + f_fmt(time_close - timenow) + "   |   HTF " + f_fmt(htfEnd - timenow), style = label.style_none, textcolor = cTxt, size = size.small)
+        tl := label.new(bar_index + 2, close, "< " + f_fmt(time_close - timenow), style = label.style_label_left, color = color.new(color.black, 100), textcolor = cTxt, size = size.small)
 
 // ================= PANEL =================
 f_pos(p) =>
@@ -233,46 +235,46 @@ f_fac(v) =>
 f_facCol(v) =>
     v > 0 ? cUp : v < 0 ? cDn : cDim
 
-f_pts(d) =>
-    str.tostring(math.round(math.abs(d) / syminfo.mintick)) + " pts"
+// Jarak harga dalam dolar (contoh 19.33), lebih mudah faham dari points
+f_dist(d) =>
+    "$" + str.tostring(math.abs(d), "#.##")
 
 ts = panelSize == "Kecil" ? size.tiny : size.small
+compact = panelMode == "Ringkas"
 var table tb = table.new(f_pos(panelPos), 2, 16, bgcolor = cBg, frame_color = cBorder, frame_width = 1, border_color = color.new(cBorder, 60), border_width = 1)
 
+f_row(r, a, b, ac, bc, sz) =>
+    table.cell(tb, 0, r, a, text_color = ac, text_size = sz, text_halign = text.align_left)
+    table.cell(tb, 1, r, b, text_color = bc, text_size = sz, text_halign = text.align_right)
+    r + 1
+
 if barstate.islast
+    table.clear(tb, 0, 0, 1, 15)
     dirTxt = dir == 1 ? "▲ BELI" : dir == -1 ? "▼ JUAL" : "■ TUNGGU"
     dirCol = dir == 1 ? cUp : dir == -1 ? cDn : cDim
     table.cell(tb, 0, 0, "GOLD PANEL", text_color = color.white, text_size = ts, text_halign = text.align_left, bgcolor = #0C244A)
     table.cell(tb, 1, 0, preset, text_color = cDim, text_size = ts, text_halign = text.align_right, bgcolor = #0C244A)
-    table.cell(tb, 0, 1, dirTxt, text_color = dirCol, text_size = size.normal, text_halign = text.align_left)
-    table.cell(tb, 1, 1, (total > 0 ? "+" : "") + str.tostring(total) + " / 6", text_color = dirCol, text_size = size.normal, text_halign = text.align_right)
+    r = 1
+    r := f_row(r, dirTxt, (total > 0 ? "+" : "") + str.tostring(total) + " / 6", dirCol, dirCol, compact ? ts : size.normal)
 
-    names = array.from("Trend HTF (EMA50)", "EMA20 vs EMA50", "RSI(14)", "MACD", "Julat 20 bar", "Asia breakout")
-    vals  = array.from(f1, f2, f3, f4, f5, f6)
-    for i = 0 to 5
-        v = array.get(vals, i)
-        table.cell(tb, 0, 2 + i, array.get(names, i), text_color = cTxt, text_size = ts, text_halign = text.align_left)
-        table.cell(tb, 1, 2 + i, f_fac(v), text_color = f_facCol(v), text_size = ts, text_halign = text.align_right)
+    if not compact
+        names = array.from("Trend HTF (EMA50)", "EMA20 vs EMA50", "RSI(14)", "MACD", "Julat 20 bar", "Asia breakout")
+        vals  = array.from(f1, f2, f3, f4, f5, f6)
+        for i = 0 to 5
+            v = array.get(vals, i)
+            r := f_row(r, array.get(names, i), f_fac(v), cTxt, f_facCol(v), ts)
 
     hasSig = dir != 0
-    table.cell(tb, 0, 8, "ENTRY", text_color = cDim, text_size = ts, text_halign = text.align_left)
-    table.cell(tb, 1, 8, hasSig ? str.tostring(entry, format.mintick) : "-", text_color = color.white, text_size = ts, text_halign = text.align_right)
-    table.cell(tb, 0, 9, "STOP LOSS", text_color = cDim, text_size = ts, text_halign = text.align_left)
-    table.cell(tb, 1, 9, hasSig ? str.tostring(sl, format.mintick) + "  (" + f_pts(entry - sl) + ")" : "-", text_color = cDn, text_size = ts, text_halign = text.align_right)
-    table.cell(tb, 0, 10, "TP1", text_color = cDim, text_size = ts, text_halign = text.align_left)
-    table.cell(tb, 1, 10, hasSig ? str.tostring(tp1, format.mintick) + "  (" + f_pts(tp1 - entry) + ")" : "-", text_color = cUp, text_size = ts, text_halign = text.align_right)
-    table.cell(tb, 0, 11, "TP2", text_color = cDim, text_size = ts, text_halign = text.align_left)
-    table.cell(tb, 1, 11, hasSig ? str.tostring(tp2, format.mintick) + "  (" + f_pts(tp2 - entry) + ")" : "-", text_color = cUp, text_size = ts, text_halign = text.align_right)
+    r := f_row(r, "ENTRY", hasSig ? str.tostring(entry, format.mintick) : "-", cDim, color.white, ts)
+    r := f_row(r, "STOP LOSS", hasSig ? str.tostring(sl, format.mintick) + "  (" + f_dist(entry - sl) + ")" : "-", cDim, cDn, ts)
+    r := f_row(r, "TP1", hasSig ? str.tostring(tp1, format.mintick) + "  (" + f_dist(tp1 - entry) + ")" : "-", cDim, cUp, ts)
+    r := f_row(r, "TP2", hasSig ? str.tostring(tp2, format.mintick) + "  (" + f_dist(tp2 - entry) + ")" : "-", cDim, cUp, ts)
 
-    sesTxt = (inAsia ? "Asia " : "") + (inLon ? "London " : "") + (inNY ? "NY " : "") + (inKZLon ? "[London KZ]" : "") + (inKZNY ? "[NY KZ]" : "")
-    table.cell(tb, 0, 12, "Sesi aktif", text_color = cDim, text_size = ts, text_halign = text.align_left)
-    table.cell(tb, 1, 12, sesTxt == "" ? "Lengang" : sesTxt, text_color = cTxt, text_size = ts, text_halign = text.align_right)
-    table.cell(tb, 0, 13, "Asia H / L", text_color = cDim, text_size = ts, text_halign = text.align_left)
-    table.cell(tb, 1, 13, na(asiaHi) ? "-" : str.tostring(asiaHi, format.mintick) + " / " + str.tostring(asiaLo, format.mintick), text_color = cGold, text_size = ts, text_halign = text.align_right)
-
-    vr = atrAvg > 0 ? atrV / atrAvg : 1.0
-    volTxt = vr > 1.3 ? "TINGGI" : vr < 0.7 ? "RENDAH" : "NORMAL"
-    table.cell(tb, 0, 14, "Volatiliti (ATR)", text_color = cDim, text_size = ts, text_halign = text.align_left)
-    table.cell(tb, 1, 14, volTxt + "  " + str.tostring(vr, "#.##") + "x", text_color = vr > 1.3 ? cDn : vr < 0.7 ? cDim : cUp, text_size = ts, text_halign = text.align_right)
-    table.cell(tb, 0, 15, "Candle HTF tutup", text_color = cDim, text_size = ts, text_halign = text.align_left)
-    table.cell(tb, 1, 15, f_fmt(htfEnd - timenow), text_color = cTxt, text_size = ts, text_halign = text.align_right)
+    if not compact
+        sesTxt = (inAsia ? "Asia " : "") + (inLon ? "London " : "") + (inNY ? "NY " : "") + (inKZLon ? "[London KZ]" : "") + (inKZNY ? "[NY KZ]" : "")
+        r := f_row(r, "Sesi aktif", sesTxt == "" ? "Lengang" : sesTxt, cDim, cTxt, ts)
+        r := f_row(r, "Asia H / L", na(asiaHi) ? "-" : str.tostring(asiaHi, format.mintick) + " / " + str.tostring(asiaLo, format.mintick), cDim, cGold, ts)
+        vr = atrAvg > 0 ? atrV / atrAvg : 1.0
+        volTxt = vr > 1.3 ? "TINGGI" : vr < 0.7 ? "RENDAH" : "NORMAL"
+        r := f_row(r, "Volatiliti (ATR)", volTxt + "  " + str.tostring(vr, "#.##") + "x", cDim, vr > 1.3 ? cDn : vr < 0.7 ? cDim : cUp, ts)
+    r := f_row(r, "Candle HTF tutup", f_fmt(htfEnd - timenow), cDim, cTxt, ts)
