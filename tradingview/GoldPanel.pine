@@ -173,22 +173,82 @@ f4 = macdM > macdS ? 1 : macdM < macdS ? -1 : 0
 rng = hi20 - lo20
 pos = rng > 0 ? (c1 - lo20) / rng : 0.5
 f5 = pos >= 0.66 ? 1 : pos <= 0.33 ? -1 : 0
-f6 = na(asiaHi) ? 0 : close > asiaHi ? 1 : close < asiaLo ? -1 : 0
+// guna close candle sebelum ni supaya signal tak berkelip dalam candle yang sama
+f6 = na(asiaHi) ? 0 : close[1] > asiaHi ? 1 : close[1] < asiaLo ? -1 : 0
 total = f1 + f2 + f3 + f4 + f5 + f6
 
 dir  = total >= minScore ? 1 : total <= -minScore ? -1 : 0
 risk = atrV * atrMult
-entry = close
-sl  = dir == 1 ? entry - risk : entry + risk
-tp1 = dir == 1 ? entry + risk * rr1 : entry - risk * rr1
-tp2 = dir == 1 ? entry + risk * rr2 : entry - risk * rr2
 
 newBuy  = dir == 1 and dir[1] != 1
 newSell = dir == -1 and dir[1] != -1
 plotshape(showArrow and newBuy, "Signal BELI", shape.triangleup, location.belowbar, cUp, size = size.tiny)
 plotshape(showArrow and newSell, "Signal JUAL", shape.triangledown, location.abovebar, cDn, size = size.tiny)
-alertcondition(newBuy, "GoldPanel: BELI", "GoldPanel: skor confluence BELI pada {{ticker}} harga {{close}}")
-alertcondition(newSell, "GoldPanel: JUAL", "GoldPanel: skor confluence JUAL pada {{ticker}} harga {{close}}")
+
+// ================= PLAN DIKUNCI =================
+// Entry/SL/TP dikunci pada harga buka candle masa signal baru keluar.
+// Plan kekal sampai kena SL, kena TP2, atau keluar signal arah bertentangan.
+// Lepas TP1 kena, SL dialih ke harga entry (breakeven).
+var int    pDir    = 0
+var int    pBar    = na
+var float  pEntry  = na
+var float  pSL     = na
+var float  pTP1    = na
+var float  pTP2    = na
+var bool   pTP1Hit = false
+var string pStat   = "Tiada plan"
+var int    nWin    = 0
+var int    nLoss   = 0
+
+evSL  = false
+evTP1 = false
+evTP2 = false
+
+// 1) semak plan yang sedang aktif (mula dari candle selepas signal)
+if pDir != 0 and bar_index > pBar
+    hitSL  = pDir == 1 ? low <= pSL : high >= pSL
+    hitTP1 = pDir == 1 ? high >= pTP1 : low <= pTP1
+    hitTP2 = pDir == 1 ? high >= pTP2 : low <= pTP2
+    // kalau SL dan TP kena dalam candle sama, anggap SL dulu (lebih jujur)
+    if hitSL
+        if pTP1Hit
+            pStat := "Tutup BE (lepas TP1)"
+        else
+            pStat := "SL KENA"
+            nLoss += 1
+            evSL := true
+        pDir := 0
+    else if hitTP2
+        pStat := "TP2 KENA"
+        if not pTP1Hit
+            nWin += 1
+        evTP2 := true
+        pDir := 0
+    else if hitTP1 and not pTP1Hit
+        pTP1Hit := true
+        pSL := pEntry
+        pStat := "TP1 KENA, SL ke BE"
+        nWin += 1
+        evTP1 := true
+
+// 2) signal baru: kunci plan baru (abaikan kalau arah sama dengan plan aktif)
+if (newBuy or newSell) and not na(risk)
+    d = newBuy ? 1 : -1
+    if pDir != d
+        pDir    := d
+        pBar    := bar_index
+        pEntry  := open
+        pSL     := open - d * risk
+        pTP1    := open + d * risk * rr1
+        pTP2    := open + d * risk * rr2
+        pTP1Hit := false
+        pStat   := "AKTIF"
+
+alertcondition(newBuy, "GoldPanel: BELI", "GoldPanel: signal BELI {{ticker}} harga {{close}}")
+alertcondition(newSell, "GoldPanel: JUAL", "GoldPanel: signal JUAL {{ticker}} harga {{close}}")
+alertcondition(evTP1, "GoldPanel: TP1 kena", "GoldPanel: TP1 kena pada {{ticker}}. SL ke breakeven.")
+alertcondition(evTP2, "GoldPanel: TP2 kena", "GoldPanel: TP2 kena pada {{ticker}}")
+alertcondition(evSL, "GoldPanel: SL kena", "GoldPanel: SL kena pada {{ticker}}")
 
 // ================= GARISAN PLAN =================
 var line[]  planL  = array.new_line()
@@ -200,15 +260,15 @@ if barstate.islast
         label.delete(lb)
     array.clear(planL)
     array.clear(planLb)
-    if showPlan and dir != 0
-        lv = array.from(entry, sl, tp1, tp2)
-        nm = array.from("ENTRY", "SL", "TP1", "TP2")
+    if showPlan and pDir != 0
+        lv = array.from(pEntry, pSL, pTP1, pTP2)
+        nm = array.from("ENTRY", pTP1Hit ? "SL (BE)" : "SL", "TP1", "TP2")
         cl = array.from(color.white, cDn, cUp, cUp)
         for i = 0 to 3
             y = array.get(lv, i)
             c = array.get(cl, i)
-            array.push(planL, line.new(bar_index, y, bar_index + 20, y, color = c, style = i == 0 ? line.style_solid : line.style_dashed, width = i == 0 ? 2 : 1))
-            array.push(planLb, label.new(bar_index + 20, y, array.get(nm, i) + " " + str.tostring(y, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.small))
+            array.push(planL, line.new(pBar, y, bar_index + 15, y, color = c, style = i == 0 ? line.style_solid : line.style_dashed, width = i == 0 ? 2 : 1))
+            array.push(planLb, label.new(bar_index + 15, y, array.get(nm, i) + " " + str.tostring(y, format.mintick), style = label.style_label_left, color = color.new(color.black, 100), textcolor = c, size = size.small))
 
 // ================= TIMER =================
 f_fmt(ms) =>
@@ -241,7 +301,7 @@ f_dist(d) =>
 
 ts = panelSize == "Kecil" ? size.tiny : size.small
 compact = panelMode == "Ringkas"
-var table tb = table.new(f_pos(panelPos), 2, 16, bgcolor = cBg, frame_color = cBorder, frame_width = 1, border_color = color.new(cBorder, 60), border_width = 1)
+var table tb = table.new(f_pos(panelPos), 2, 20, bgcolor = cBg, frame_color = cBorder, frame_width = 1, border_color = color.new(cBorder, 60), border_width = 1)
 
 f_row(r, a, b, ac, bc, sz) =>
     table.cell(tb, 0, r, a, text_color = ac, text_size = sz, text_halign = text.align_left)
@@ -249,7 +309,7 @@ f_row(r, a, b, ac, bc, sz) =>
     r + 1
 
 if barstate.islast
-    table.clear(tb, 0, 0, 1, 15)
+    table.clear(tb, 0, 0, 1, 19)
     dirTxt = dir == 1 ? "▲ BELI" : dir == -1 ? "▼ JUAL" : "■ TUNGGU"
     dirCol = dir == 1 ? cUp : dir == -1 ? cDn : cDim
     table.cell(tb, 0, 0, "GOLD PANEL", text_color = color.white, text_size = ts, text_halign = text.align_left, bgcolor = #0C244A)
@@ -264,11 +324,14 @@ if barstate.islast
             v = array.get(vals, i)
             r := f_row(r, array.get(names, i), f_fac(v), cTxt, f_facCol(v), ts)
 
-    hasSig = dir != 0
-    r := f_row(r, "ENTRY", hasSig ? str.tostring(entry, format.mintick) : "-", cDim, color.white, ts)
-    r := f_row(r, "STOP LOSS", hasSig ? str.tostring(sl, format.mintick) + "  (" + f_dist(entry - sl) + ")" : "-", cDim, cDn, ts)
-    r := f_row(r, "TP1", hasSig ? str.tostring(tp1, format.mintick) + "  (" + f_dist(tp1 - entry) + ")" : "-", cDim, cUp, ts)
-    r := f_row(r, "TP2", hasSig ? str.tostring(tp2, format.mintick) + "  (" + f_dist(tp2 - entry) + ")" : "-", cDim, cUp, ts)
+    active  = pDir != 0
+    planTxt = active ? (pDir == 1 ? "BELI" : "JUAL") + " @ " + str.tostring(pEntry, format.mintick) : "-"
+    statCol = pStat == "SL KENA" ? cDn : str.contains(pStat, "TP") ? cUp : pStat == "AKTIF" ? cGold : cDim
+    r := f_row(r, "PLAN", planTxt, cAcc, active ? (pDir == 1 ? cUp : cDn) : cDim, ts)
+    r := f_row(r, "Status", pStat, cDim, statCol, ts)
+    r := f_row(r, "STOP LOSS", active ? str.tostring(pSL, format.mintick) + "  (" + f_dist(pEntry - pSL) + ")" : "-", cDim, cDn, ts)
+    r := f_row(r, "TP1", active ? str.tostring(pTP1, format.mintick) + "  (" + f_dist(pTP1 - pEntry) + ")" : "-", cDim, cUp, ts)
+    r := f_row(r, "TP2", active ? str.tostring(pTP2, format.mintick) + "  (" + f_dist(pTP2 - pEntry) + ")" : "-", cDim, cUp, ts)
 
     if not compact
         sesTxt = (inAsia ? "Asia " : "") + (inLon ? "London " : "") + (inNY ? "NY " : "") + (inKZLon ? "[London KZ]" : "") + (inKZNY ? "[NY KZ]" : "")
@@ -278,3 +341,5 @@ if barstate.islast
         volTxt = vr > 1.3 ? "TINGGI" : vr < 0.7 ? "RENDAH" : "NORMAL"
         r := f_row(r, "Volatiliti (ATR)", volTxt + "  " + str.tostring(vr, "#.##") + "x", cDim, vr > 1.3 ? cDn : vr < 0.7 ? cDim : cUp, ts)
     r := f_row(r, "Candle HTF tutup", f_fmt(htfEnd - timenow), cDim, cTxt, ts)
+    nTot = nWin + nLoss
+    r := f_row(r, "Rekod chart ni", nTot > 0 ? str.tostring(nWin) + "W / " + str.tostring(nLoss) + "L  (" + str.tostring(math.round(100.0 * nWin / nTot)) + "%)" : "-", cDim, cTxt, ts)
