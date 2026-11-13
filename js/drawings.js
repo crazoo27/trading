@@ -97,9 +97,26 @@ TD.createDrawings = function (ctx) {
 
   // ---------- render ----------
   let paneW = 0;
+  // zon S/R dari analisis auto (bukan lukisan pengguna: tak disimpan, tak boleh dipilih)
+  let autoZones = [];
+  function drawZones(g, size) {
+    g.font = '10px -apple-system, Segoe UI, Roboto, sans-serif';
+    g.textBaseline = 'top'; g.textAlign = 'right'; // kanan: tak bertindih dengan legend di kiri atas
+    for (const z of autoZones) {
+      const y1 = Y(z.hi), y2 = Y(z.lo);
+      if (y1 == null || y2 == null) continue;
+      const col = z.kind === 'R' ? '242,54,69' : z.kind === 'S' ? '8,153,129' : '245,179,1';
+      g.fillStyle = `rgba(${col},0.10)`;
+      g.fillRect(0, Math.min(y1, y2), size.width, Math.max(2, Math.abs(y2 - y1)));
+      g.fillStyle = `rgba(${col},0.9)`;
+      g.fillText(`${z.name}${z.touches ? ' · ' + z.touches + '×' : ''}`, size.width - 6, Math.min(y1, y2) + 1);
+    }
+  }
   function render(g, size) {
     paneW = size.width;
-    if (hidden || !series) return;
+    if (!series) return;
+    if (autoZones.length) drawZones(g, size);
+    if (hidden) return;
     g.save();
     g.lineCap = 'round';
     for (const d of all()) {
@@ -456,6 +473,7 @@ TD.createDrawings = function (ctx) {
     load(list) { items = (list || []).map(d => ({ ...d })); undoStack = []; selectedId = null; creating = null; ctx.onSelect(null); requestUpdate(); },
     selected: () => items.find(d => d.id === selectedId) || null,
     list: () => items,
+    setZones(z) { autoZones = z || []; requestUpdate(); },
     // ubah lukisan tanpa undo/pilihan (cth bila alert garisan dah trigger)
     patch(id, p) { const d = items.find(x => x.id === id); if (!d) return; Object.assign(d, p); commit(); if (d.id === selectedId) ctx.onSelect(d); },
     update(patch) { const d = items.find(x => x.id === selectedId); if (!d) return; pushUndo(); Object.assign(d, patch); commit(); ctx.onSelect(d); },

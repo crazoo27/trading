@@ -40,6 +40,18 @@ Boleh juga deploy sebagai static site (GitHub Pages / Netlify / Vercel) supaya b
 - Signal auto (EMA20/50 cross ikut EMA200, RSI keluar 30/70), alert harga, jurnal (win rate, jumlah R, P/L)
 - Notifikasi: toast + bunyi + notifikasi browser
 
+## Analisis (tab Analisis)
+
+Analisis berasaskan peraturan, ikut cara trader berpengalaman berfikir. **Bukan ramalan dan bukan jaminan untung.**
+
+- **Multi-timeframe**: trend TF semasa + 2 timeframe lebih besar (cth 15m → 1h & 4h). Bila bercanggah, tiada setup
+- **Struktur pasaran**: swing high/low, Higher High/Higher Low atau Lower High/Lower Low, break of structure
+- **Zon support/resistance auto** dari kelompok swing (makin banyak sentuhan, makin kukuh), dipapar atas chart
+- **Pelan**: entry di zon (bukan kejar harga), SL di sebalik zon + 0.5 ATR, TP di zon seterusnya, R:R dan saiz posisi
+- **Senarai semak 7 faktor + gred A/B/C**. Keputusan: SETUP, PASANG LIMIT (tunggu harga datang), atau TUNGGU (dengan sebab)
+- **Backtest**: 4 strategi pada data yang dimuat; masuk pada harga buka candle seterusnya, SL dikira dulu kalau SL & TP dalam candle sama, yuran ditolak. Tunjuk win rate, purata R, profit factor, drawdown, konsistensi dua separuh tempoh, dan perbandingan dengan beli & simpan. Diuji: pada data random walk semua strategi rugi selepas yuran (tiada "edge palsu")
+- **Had rugi harian** (Tetapan): bila rugi hari ini capai had (default 3R), setup baru perlu pengesahan
+
 ## Prestasi
 
 Diukur pada CPU phone simulasi (4x lebih perlahan), latency rangkaian 250 ms:

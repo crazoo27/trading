@@ -57,6 +57,9 @@
     fx: saved.fx || 4.2,
     spotOnly: saved.spotOnly ?? false,
     legendOpen: saved.legendOpen ?? (window.innerWidth > 860),
+    dailyR: saved.dailyR ?? 3,
+    btFee: saved.btFee ?? 0.1,
+    anaZones: saved.anaZones ?? true,
     source: saved.source || null,
     magnet: saved.magnet ?? false,
     hideDrawings: false,
@@ -81,7 +84,7 @@
   const persistNow = () => { clearTimeout(persistTimer); persistTimer = null; store.save(snapshotState()); };
   const snapshotState = () => ({
     symbol: S.symbol, interval: S.interval, chartType: S.chartType, watch: S.watch, indicators: S.indicators, drawings: S.drawings,
-    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen,
+    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen, dailyR: S.dailyR, btFee: S.btFee, anaZones: S.anaZones,
     magnet: S.magnet, priceMode: S.priceMode, sideTab: S.sideTab, sideCollapsed: S.sideCollapsed,
     setups: S.setups, alerts: S.alerts, log: S.log.slice(0, 100),
   });
@@ -549,6 +552,7 @@
     if (S.demo) { buildLegend(); startDemo(gen); return; }
     // candle di skrin sekarang belum tentu milik pair/timeframe baru: jangan guna untuk kiraan sehingga data baru sampai
     S.stale = true; S.candlesKey = null;
+    drawings.setZones([]); // zon analisis milik pair/TF lama
     // permintaan yang dimulakan awal dalam <head> (sebelum skrip lain habis dimuat), kalau untuk pair yang sama
     const early = TD.early && TD.early.key === `${S.symbol}|${S.interval}` ? TD.early : null;
     TD.early = null;
@@ -595,6 +599,7 @@
     renderAll(); drawLines();
     chart.timeScale().setVisibleLogicalRange({ from: S.candles.length - 150, to: S.candles.length + 10 });
     renderSymDetail();
+    scheduleAnalysis();
   }
 
   function applyPrecision() {
@@ -684,6 +689,7 @@
     if (!c || c.time === S.lastSignalTime) return;
     S.lastSignalTime = c.time;
     renderMarkers();
+    scheduleAnalysis(); // struktur & zon berubah bila candle tutup
     if (!S.autoSignal) return;
     for (const s of signalAt(signalsFor(S.candles), i)) {
       const spotSell = s.side === 'short' && S.spotOnly;
@@ -944,10 +950,22 @@
     $('#calc').innerHTML = html;
     $('#btnSave').disabled = errs.length > 0;
   }
+  // jumlah R yang direalisasi hari ini (ikut tarikh tempatan)
+  function todayR() {
+    const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+    return S.setups.filter(s => s.status === 'closed' && s.closedAt >= d0.getTime() && s.r != null).reduce((a, s) => a + s.r, 0);
+  }
   function saveDraft() {
     const d = S.draft;
     const { entry, errs } = validateDraft();
     if (errs.length) return;
+    // Disiplin risiko: had rugi harian & bilangan posisi terbuka
+    const tr = todayR();
+    if (S.dailyR > 0 && tr <= -S.dailyR) {
+      if (!confirm(`Hari ni kau dah rugi ${tr.toFixed(2)}R (had harian ${S.dailyR}R).\n\nTrader berpengalaman berhenti bila sampai had. Selepas beberapa kali rugi, keputusan biasanya dipengaruhi emosi.\n\nTetap nak simpan setup ni?`)) return;
+    }
+    const openNow = S.setups.filter(isOpen).length;
+    if (openNow >= 3) toast('Banyak posisi serentak', `Dah ada ${openNow} setup dipantau. Kalau semua kena SL serentak, rugi ${openNow + 1}R sekali gus. Pertimbang kurangkan.`, 'bad');
     const px = priceOf(S.symbol);
     const s = {
       id: uid(), symbol: S.symbol, interval: S.interval, dir: d.dir, entry, sl: d.sl, origSl: d.sl, tp1: d.tp1, tp2: d.tp2,
@@ -996,6 +1014,7 @@
     if (S.sideCollapsed) return;
     if (S.sideTab === 'watch') { renderWatchPrices(); renderSymDetail(); }
     else if (S.sideTab === 'open') renderOpenLive();
+    else if (S.sideTab === 'ana' && anaDirty) scheduleAnalysis();
   }
   const setText = (el, t) => { if (el && el._t !== t) { el._t = t; el.textContent = t; } };
   function setModeBadge() { $('#modeBadge').textContent = S.demo ? 'DEMO' : 'LIVE'; $('#modeBadge').classList.toggle('demo', S.demo); }
@@ -1440,7 +1459,151 @@
   new ResizeObserver(() => { positionPaneLegends(); const d = drawings.selected(); if (d) renderSelBar(d); }).observe(chartHost);
   chartHost.addEventListener('pointerup', () => setTimeout(positionPaneLegends, 0));
 
-  // ---------- boot ----------
+
+  // ================= ANALISIS (gaya trader berpengalaman) =================
+  const A = TD.ana;
+  // timeframe lebih besar yang dirujuk untuk setiap timeframe
+  const HTF = { '1m': ['15m', '1h'], '3m': ['15m', '1h'], '5m': ['1h', '4h'], '15m': ['1h', '4h'], '30m': ['4h', '1d'], '1h': ['4h', '1d'], '2h': ['1d', '1w'], '4h': ['1d', '1w'], '1d': ['1w'], '1w': [] };
+  const TF_NAME = (tf) => tf.replace('m', ' minit').replace('h', ' jam').replace('d', ' hari').replace('w', ' minggu');
+  const htfCache = new Map();
+  async function getHTF(tf) {
+    const key = `${S.symbol}|${tf}|${S.demo ? 'demo' : feed ? feed.id : '-'}`;
+    const hit = htfCache.get(key);
+    if (hit && Date.now() - hit.at < 5 * 60e3) return hit.c;
+    let c = null;
+    if (!S.demo && feed) { try { c = await feed.history(S.symbol, tf); } catch { c = null; } }
+    // sandaran: bina dari candle semasa (sejarah lebih pendek, tapi masih beri gambaran arah)
+    if (!c || c.length < 60) c = A.aggregate(S.candles, INTERVAL_SEC[tf]);
+    htfCache.set(key, { at: Date.now(), c });
+    return c;
+  }
+
+  let anaTimer = null, anaDirty = true, anaRun = 0, lastPlan = null;
+  function scheduleAnalysis() {
+    anaDirty = true;
+    const visible = !S.sideCollapsed && S.sideTab === 'ana';
+    if (!visible && !S.anaZones) return; // tiada siapa tengok: tak perlu kira
+    clearTimeout(anaTimer);
+    anaTimer = setTimeout(runAnalysis, 300);
+  }
+  async function runAnalysis() {
+    if (S.stale || S.candles.length < 60) { drawings.setZones([]); return; }
+    const run = ++anaRun, key = `${S.symbol}|${S.interval}`;
+    anaDirty = false;
+    const tfs = HTF[S.interval] || [];
+    const htf = [];
+    for (const tf of tfs) {
+      const c = await getHTF(tf);
+      if (run !== anaRun || key !== `${S.symbol}|${S.interval}`) return; // pengguna dah tukar pair/TF
+      htf.push({ tf, info: A.trendInfo(c) });
+    }
+    const p = A.plan(S.candles, htf, { spotOnly: S.spotOnly });
+    lastPlan = { ...p, symbol: S.symbol, interval: S.interval, htf };
+    const z = p.zones;
+    drawings.setZones(S.anaZones && z ? [...z.above, ...z.inside, ...z.below] : []);
+    renderAnalysis(lastPlan);
+  }
+
+  const DIR_TXT = { naik: '▲ Naik', turun: '▼ Turun', neutral: '◆ Neutral', julat: '◆ Berjulat' };
+  const dirCls = (d) => d === 'naik' ? 'pos' : d === 'turun' ? 'neg' : 'muted';
+  function renderAnalysis(p) {
+    const el = $('#anaOut'); if (!el) return;
+    const i = p.info;
+    if (!i) { el.innerHTML = `<div class="empty">${esc(p.reasons[0] || 'Data belum cukup.')}</div>`; return; }
+    const dec = S.precision;
+    const vCls = p.verdict === 'SETUP' ? 'good' : p.verdict === 'PASANG LIMIT' ? 'info' : 'wait';
+    const vTxt = p.verdict === 'SETUP' ? `✅ SETUP ${p.dir === 'long' ? 'LONG' : 'SHORT'} · Gred ${p.grade}`
+      : p.verdict === 'PASANG LIMIT' ? `⏳ PASANG LIMIT ${p.dir === 'long' ? 'BUY' : 'SELL'} · Gred ${p.grade}`
+      : '⏸ TUNGGU, tiada setup berkualiti';
+    let html = `<div class="card ana-verdict ${vCls}"><div class="v">${vTxt}</div>`;
+    if (p.reasons.length) html += `<ul class="reasons">${p.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>`;
+    html += `</div>`;
+
+    if (p.entry != null) {
+      const riskUsd = S.balance * S.riskPct / 100, qty = riskUsd / p.risk;
+      html += `<div class="card"><div class="hd"><b>Pelan ${p.dir === 'long' ? 'Long' : 'Short'}</b><span class="muted">${p.zone ? esc(p.zone.name || '') : ''}</span></div>
+        <div class="grid"><div>Entry<b>${fmt(p.entry, dec)}</b></div><div>SL<b class="neg">${fmt(p.sl, dec)}</b></div><div>TP1<b class="pos">${fmt(p.tp1, dec)}</b></div><div>TP2<b class="pos">${fmt(p.tp2, dec)}</b></div></div>
+        <div class="ana-kv"><span>R:R ke TP1</span><b>1 : ${p.rr.toFixed(2)}</b><span>Saiz posisi</span><b>${qty < 1 ? qty.toFixed(5) : qty.toFixed(2)} ${esc(splitSym(S.symbol)[0])}</b><span>Risiko</span><b class="neg">${fmtUsd(riskUsd)}</b><span>Untung jika TP1</span><b class="pos">${fmtUsd(riskUsd * p.rr)}</b></div>
+        ${p.tpFromZone ? '' : '<div class="note">TP1 tiada zon jelas: guna 2R dari entry.</div>'}
+        ${p.verdict !== 'TUNGGU' ? '<div class="acts"><button class="btn small primary" id="btnUsePlan">Guna pelan ni →</button></div>' : (p.grade ? '<div class="acts"><button class="btn small" id="btnUsePlan">Muat ke Setup (untuk kaji)</button></div>' : '')}
+      </div>`;
+    }
+    if (p.checks.length) {
+      html += `<div class="card"><div class="hd"><b>Senarai semak (${p.score}/7)</b></div><ul class="checks">${p.checks.map(c => `<li class="${c.ok ? 'pos' : 'neg'}">${c.ok ? '✓' : '✗'} <span>${esc(c.text)}</span></li>`).join('')}</ul></div>`;
+    }
+    const htfRows = (p.htf || []).map(h => `<span>Trend ${esc(h.tf)}</span><b class="${dirCls(h.info?.dir)}">${h.info ? DIR_TXT[h.info.dir] + ` (${h.info.score > 0 ? '+' : ''}${h.info.score})` : 'tiada data'}</b>`).join('');
+    html += `<div class="card"><div class="hd"><b>Keadaan pasaran</b><span class="muted">${esc(S.interval)}</span></div><div class="ana-kv">
+      ${htfRows}
+      <span>Trend ${esc(S.interval)}</span><b class="${dirCls(i.dir)}">${DIR_TXT[i.dir]} (${i.score > 0 ? '+' : ''}${i.score})</b>
+      <span>Struktur</span><b>${esc(i.st.label)}</b>
+      ${i.st.bos ? `<span>Break of structure</span><b class="${i.st.bos === 'atas' ? 'pos' : 'neg'}">Tembus swing ${i.st.bos === 'atas' ? 'high ▲' : 'low ▼'}</b>` : ''}
+      <span>RSI 14</span><b>${i.rsi.toFixed(1)}${i.rsi >= 70 ? ' (overbought)' : i.rsi <= 30 ? ' (oversold)' : ''}</b>
+      <span>Volatiliti (ATR)</span><b>${i.atrPct.toFixed(2)}% · ${i.volRatio > 1.8 ? 'tinggi luar biasa' : i.volRatio < 0.6 ? 'sangat rendah' : 'normal'}</b>
+      <span>Gaya pergerakan</span><b>${i.er >= 0.35 ? 'Trend kuat' : i.er >= 0.2 ? 'Trend sederhana' : 'Berombak / choppy'} (ER ${i.er.toFixed(2)})</b>
+    </div></div>`;
+    const z = p.zones;
+    if (z) {
+      const row = (x) => `<div class="zrow ${x.kind}"><b>${esc(x.name)}</b><span>${fmt(x.lo, dec)} – ${fmt(x.hi, dec)}</span><span class="muted">${x.touches}× sentuh</span></div>`;
+      html += `<div class="card"><div class="hd"><b>Zon support / resistance</b></div>
+        ${[...z.above].reverse().map(row).join('')}
+        <div class="zrow px"><b>Harga</b><span>${fmt(i.px, dec)}</span><span></span></div>
+        ${z.inside.map(row).join('')}${z.below.map(row).join('')}
+      </div>`;
+    }
+    html += `<p class="muted">Analisis ni ikut peraturan teknikal tetap, bukan ramalan. Berita besar (CPI, FOMC, hack exchange) boleh batalkan mana-mana setup. Patuhi SL.</p>`;
+    el.innerHTML = html;
+  }
+  $('#anaOut').addEventListener('click', e => {
+    if (!e.target.closest('#btnUsePlan') || !lastPlan || lastPlan.entry == null) return;
+    const p = lastPlan;
+    if (p.symbol !== S.symbol) return;
+    S.draft = { ...S.draft, dir: p.dir, type: 'limit', entry: roundP(p.entry), sl: roundP(p.sl), tp1: roundP(p.tp1), tp2: roundP(p.tp2),
+      note: `Analisis auto: ${p.verdict}, gred ${p.grade} (${p.score}/7), bias ${p.bias}${p.htf?.length ? ' ikut ' + p.htf.map(h => h.tf).join('/') : ''}` };
+    syncDraftInputs(); drawLines(); renderCalc(); switchTab('setup', true);
+    toast('Pelan dimuat ke Setup', 'Semak nilai, kemudian tekan "Simpan & pantau".', 'info');
+  });
+  $('#btnAna').onclick = () => { htfCache.clear(); $('#anaOut').innerHTML = '<div class="empty">Menganalisa…</div>'; runAnalysis(); };
+  $('#anaZones').checked = S.anaZones;
+  $('#anaZones').onchange = e => { S.anaZones = e.target.checked; persist(); if (S.anaZones) runAnalysis(); else drawings.setZones([]); };
+
+  // ---- backtest ----
+  $('#btStrat').innerHTML = Object.entries(A.STRATS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
+  $('#btFee').value = S.btFee;
+  $('#btFee').oninput = e => { const v = num(e.target.value); if (v != null && v >= 0 && v < 5) { S.btFee = v; persist(); } };
+  function sparkline(curve) {
+    if (curve.length < 2) return '';
+    const w = 300, h = 70, min = Math.min(...curve), max = Math.max(...curve), span = max - min || 1;
+    const pts = curve.map((v, i) => `${(i / (curve.length - 1) * w).toFixed(1)},${(h - 4 - (v - min) / span * (h - 8)).toFixed(1)}`).join(' ');
+    const y0 = h - 4 - (0 - min) / span * (h - 8);
+    const col = curve[curve.length - 1] >= 0 ? 'var(--up)' : 'var(--down)';
+    return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="0" x2="${w}" y1="${y0}" y2="${y0}" stroke="var(--line)" stroke-dasharray="3 3"/><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
+  }
+  $('#btnBt').onclick = () => {
+    if (S.candles.length < 250) { $('#btOut').innerHTML = '<div class="empty">Perlu sekurang-kurangnya 250 candle.</div>'; return; }
+    const bt = A.backtest(S.candles, $('#btStrat').value, { rr: +$('#btRR').value, slAtr: 1.5, feePct: S.btFee, allowShort: !S.spotOnly });
+    const j = A.judge(bt);
+    const days = ((bt.to - bt.from) / 86400).toFixed(0);
+    const riskUsd = S.balance * S.riskPct / 100;
+    const cell = (k, v, cls = '') => `<div class="stat"><b class="${cls}">${v}</b><span>${k}</span></div>`;
+    $('#btOut').innerHTML = `
+      <div class="card ana-verdict ${j.level === 'good' ? 'good' : j.level === 'bad' ? 'bad' : 'wait'}"><div class="v">${j.level === 'good' ? '✅' : j.level === 'bad' ? '❌' : '⚠'} ${esc(j.text)}</div></div>
+      <div class="stats">
+        ${cell('Trade', bt.n)}${cell('Win rate', bt.winRate.toFixed(0) + '%')}${cell('Purata / trade', fmtR(bt.expectancy), bt.expectancy >= 0 ? 'pos' : 'neg')}
+        ${cell('Jumlah', fmtR(bt.totalR), bt.totalR >= 0 ? 'pos' : 'neg')}${cell('Profit factor', isFinite(bt.profitFactor) ? bt.profitFactor.toFixed(2) : '∞')}${cell('Drawdown maks', '-' + bt.maxDD.toFixed(1) + 'R', 'neg')}
+        ${cell('Rugi berturut maks', bt.maxLoseStreak)}${cell('Separuh 1', fmtR(bt.firstHalfR), bt.firstHalfR >= 0 ? 'pos' : 'neg')}${cell('Separuh 2', fmtR(bt.secondHalfR), bt.secondHalfR >= 0 ? 'pos' : 'neg')}
+      </div>
+      ${sparkline(bt.curve)}
+      <p class="muted">${days} hari data ${esc(S.symbol)} ${esc(S.interval)} · SL 1.5×ATR · yuran ${bt.feePct}%/transaksi${S.spotOnly ? ' · long sahaja (akaun spot)' : ''}.
+      Pada risiko ${fmtUsd(riskUsd)} setiap trade, keputusan ≈ <b class="${bt.totalR >= 0 ? 'pos' : 'neg'}">${fmtUsd(bt.totalR * riskUsd)}</b>. Beli &amp; simpan dalam tempoh sama: <b class="${bt.buyHoldPct >= 0 ? 'pos' : 'neg'}">${bt.buyHoldPct >= 0 ? '+' : ''}${bt.buyHoldPct.toFixed(1)}%</b>.
+      Yuran purata ${bt.avgCost.toFixed(2)}R setiap trade.
+      ${bt.expectancy > 0 ? `Rugi ${bt.maxLoseStreak} kali berturut-turut pun berlaku dalam strategi yang untung: bersedia dari segi mental dan modal.` : ''}</p>`;
+  };
+
+  // ---- had rugi harian ----
+  $('#sDailyR').value = S.dailyR;
+  $('#sDailyR').oninput = e => { const v = num(e.target.value); if (v != null && v >= 0) { S.dailyR = v; persist(); } };
+
+  // ---------- boot (paling akhir: semua fungsi & pemboleh ubah dah didefinisikan) ----------
   setModeBadge();
   $('#btnSignals').classList.toggle('on', S.showSignals);
   $('#btnMagnet').classList.toggle('on', S.magnet);

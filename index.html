@@ -13,9 +13,9 @@
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <title>TradeDesk</title>
   <link rel="preconnect" href="https://www.okx.com" crossorigin>
-  <link rel="stylesheet" href="css/style.css?v=6">
+  <link rel="stylesheet" href="css/style.css?v=7">
   <!-- Mula minta data candle SEKARANG, sementara skrip chart yang besar masih dimuat turun dan diproses. -->
-  <script src="js/feeds.js?v=6"></script>
+  <script src="js/feeds.js?v=7"></script>
   <script>
     try {
       var st = JSON.parse(localStorage.getItem('tradedesk.v2') || '{}');
@@ -52,6 +52,7 @@
       <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
       <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0112 0v6l2 2H4zM10 21h4" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
       <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z M5 17a3 3 0 013-3h11" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-ana" viewBox="0 0 24 24"><path d="M3 17l5-5 4 3 6-7" stroke="currentColor" stroke-width="1.5" fill="none"/><circle cx="17" cy="16" r="3.2" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M19.4 18.4L22 21" stroke="currentColor" stroke-width="1.5"/></symbol>
       <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" stroke="currentColor" stroke-width="1.5"/></symbol>
       <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M16 16l4 4" stroke="currentColor" stroke-width="1.8"/></symbol>
       <symbol id="i-candles" viewBox="0 0 24 24"><path d="M7 3v18M17 3v18" stroke="currentColor" stroke-width="1.2"/><rect x="5" y="7" width="4" height="9" fill="currentColor"/><rect x="15" y="5" width="4" height="8" stroke="currentColor" fill="none"/></symbol>
@@ -152,6 +153,21 @@
           <div id="logList" class="list log"></div>
         </div>
 
+        <!-- ANALISIS -->
+        <div class="tab-body hidden" data-body="ana">
+          <div class="ph"><b>Analisis</b><button class="btn small accent" id="btnAna">🔍 Analisa semula</button></div>
+          <label class="check"><input type="checkbox" id="anaZones" checked> Papar zon support/resistance atas chart</label>
+          <div id="anaOut" class="list"><div class="empty">Menganalisa…</div></div>
+
+          <h4>Backtest: uji strategi pada data lama</h4>
+          <p class="muted" style="margin:0">Guna candle yang sedang dimuat untuk pair &amp; timeframe ni. Timeframe 1h/4h bagi sejarah lebih panjang dan keputusan lebih boleh dipercayai.</p>
+          <div class="field"><label>Strategi</label><select id="btStrat" class="sel"></select></div>
+          <div class="field"><label>Sasaran R:R</label><select id="btRR" class="sel"><option value="1.5">1 : 1.5</option><option value="2" selected>1 : 2</option><option value="3">1 : 3</option></select></div>
+          <div class="field"><label>Yuran / transaksi (%)</label><input type="number" step="0.01" id="btFee" inputmode="decimal"></div>
+          <button class="btn" id="btnBt">▶ Jalankan backtest</button>
+          <div id="btOut"></div>
+        </div>
+
         <!-- JOURNAL -->
         <div class="tab-body hidden" data-body="journal">
           <div class="ph"><b>Jurnal</b><button class="btn small ghost" id="btnClearJournal">Padam</button></div>
@@ -167,6 +183,8 @@
           <p class="muted" id="fxNote" style="margin-top:-4px"></p>
           <div class="field"><label id="lblBalance">Modal (USD)</label><input type="number" step="any" inputmode="decimal" id="sBalance"></div>
           <div class="field"><label>Risk / trade (%)</label><input type="number" step="0.1" id="sRisk"></div>
+          <div class="field"><label>Had rugi harian (R)</label><input type="number" step="0.5" id="sDailyR" inputmode="decimal"></div>
+          <p class="muted" style="margin-top:-4px">Bila rugi hari ini capai had ni (cth 3R = 3% modal pada risk 1%), app halang setup baru. Elak "balas dendam" pada pasaran.</p>
           <label class="check"><input type="checkbox" id="sSpot"> Akaun spot sahaja (cth Luno: beli dulu, jual kemudian — sorok Short)</label>
           <label class="check"><input type="checkbox" id="sSound"> Bunyi notifikasi</label>
           <label class="check"><input type="checkbox" id="sAutoSignal"> Notifikasi signal auto (EMA cross / RSI)</label>
@@ -182,6 +200,7 @@
         <button data-tab="setup" title="Setup"><svg><use href="#i-target"/></svg><span>Setup</span></button>
         <button data-tab="open" title="Dipantau"><svg><use href="#i-pulse"/></svg><span>Pantau</span><i id="openCount" class="count hidden">0</i></button>
         <button data-tab="alerts" title="Alert"><svg><use href="#i-bell"/></svg><span>Alert</span></button>
+        <button data-tab="ana" title="Analisis"><svg><use href="#i-ana"/></svg><span>Analisis</span></button>
         <button data-tab="journal" title="Jurnal"><svg><use href="#i-book"/></svg><span>Jurnal</span></button>
         <button data-tab="settings" title="Tetapan"><svg><use href="#i-gear"/></svg><span>Tetapan</span></button>
       </nav>
@@ -227,8 +246,9 @@
   <div id="toasts" class="toasts"></div>
 
   <script src="lib/lightweight-charts.standalone.production.js?v=5.3.0"></script>
-  <script src="js/indicators.js?v=6"></script>
-  <script src="js/drawings.js?v=6"></script>
-  <script src="js/app.js?v=6"></script>
+  <script src="js/indicators.js?v=7"></script>
+  <script src="js/analysis.js?v=7"></script>
+  <script src="js/drawings.js?v=7"></script>
+  <script src="js/app.js?v=7"></script>
 </body>
 </html>
