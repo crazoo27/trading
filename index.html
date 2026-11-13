@@ -8,129 +8,203 @@
   <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
+  <svg width="0" height="0" style="position:absolute">
+    <defs>
+      <symbol id="i-cursor" viewBox="0 0 24 24"><path d="M12 3v18M3 12h18" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-trend" viewBox="0 0 24 24"><path d="M4 19L20 5" stroke="currentColor" stroke-width="1.5"/><circle cx="4" cy="19" r="2" fill="currentColor"/><circle cx="20" cy="5" r="2" fill="currentColor"/></symbol>
+      <symbol id="i-ray" viewBox="0 0 24 24"><path d="M4 19L22 4" stroke="currentColor" stroke-width="1.5"/><circle cx="4" cy="19" r="2" fill="currentColor"/><circle cx="12" cy="12.3" r="2" fill="currentColor"/></symbol>
+      <symbol id="i-hline" viewBox="0 0 24 24"><path d="M2 12h20" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="2" fill="currentColor"/></symbol>
+      <symbol id="i-vline" viewBox="0 0 24 24"><path d="M12 2v20" stroke="currentColor" stroke-width="1.5"/><circle cx="12" cy="12" r="2" fill="currentColor"/></symbol>
+      <symbol id="i-rect" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="12" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-fib" viewBox="0 0 24 24"><path d="M3 5h18M3 9h18M3 13h18M3 19h18" stroke="currentColor" stroke-width="1.3"/></symbol>
+      <symbol id="i-long" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="8" fill="#08998166" stroke="#089981"/><rect x="4" y="12" width="16" height="6" fill="#f2364566" stroke="#f23645"/></symbol>
+      <symbol id="i-short" viewBox="0 0 24 24"><rect x="4" y="6" width="16" height="6" fill="#f2364566" stroke="#f23645"/><rect x="4" y="12" width="16" height="8" fill="#08998166" stroke="#089981"/></symbol>
+      <symbol id="i-measure" viewBox="0 0 24 24"><path d="M12 3v18M8 7l4-4 4 4M8 17l4 4 4-4" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-text" viewBox="0 0 24 24"><path d="M5 5h14M12 5v15" stroke="currentColor" stroke-width="2"/></symbol>
+      <symbol id="i-magnet" viewBox="0 0 24 24"><path d="M6 4v8a6 6 0 0012 0V4h-4v8a2 2 0 01-4 0V4z" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12z" stroke="currentColor" stroke-width="1.5" fill="none"/><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-trash" viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-undo" viewBox="0 0 24 24"><path d="M9 14L4 9l5-5M4 9h10a6 6 0 010 12h-3" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-camera" viewBox="0 0 24 24"><path d="M4 8h3l2-3h6l2 3h3v11H4z" stroke="currentColor" stroke-width="1.5" fill="none"/><circle cx="12" cy="13" r="3.5" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-full" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></symbol>
+      <symbol id="i-target" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8" stroke="currentColor" stroke-width="1.5" fill="none"/><circle cx="12" cy="12" r="3" fill="currentColor"/></symbol>
+      <symbol id="i-pulse" viewBox="0 0 24 24"><path d="M3 12h4l3-7 4 14 3-7h4" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-bell" viewBox="0 0 24 24"><path d="M6 17V11a6 6 0 0112 0v6l2 2H4zM10 21h4" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-book" viewBox="0 0 24 24"><path d="M5 4h11a3 3 0 013 3v13H8a3 3 0 01-3-3z M5 17a3 3 0 013-3h11" stroke="currentColor" stroke-width="1.5" fill="none"/></symbol>
+      <symbol id="i-gear" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3" stroke="currentColor" stroke-width="1.5" fill="none"/><path d="M12 2v3M12 19v3M2 12h3M19 12h3M5 5l2 2M17 17l2 2M5 19l2-2M17 7l2-2" stroke="currentColor" stroke-width="1.5"/></symbol>
+      <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="6" stroke="currentColor" stroke-width="1.8" fill="none"/><path d="M16 16l4 4" stroke="currentColor" stroke-width="1.8"/></symbol>
+      <symbol id="i-candles" viewBox="0 0 24 24"><path d="M7 3v18M17 3v18" stroke="currentColor" stroke-width="1.2"/><rect x="5" y="7" width="4" height="9" fill="currentColor"/><rect x="15" y="5" width="4" height="8" stroke="currentColor" fill="none"/></symbol>
+    </defs>
+  </svg>
+
   <header class="topbar">
-    <div class="brand">TradeDesk</div>
-    <div class="sym-box">
-      <span id="symName" class="sym-name">BTCUSDT</span>
-      <span id="lastPrice" class="last-price">—</span>
-      <span id="lastChange" class="chg">—</span>
-    </div>
+    <button class="tb sym-btn" id="btnSymbol" title="Cari pair (atau terus taip)"><svg><use href="#i-search"/></svg><span id="symName">BTCUSDT</span></button>
+    <div class="sep"></div>
     <div class="intervals" id="intervals"></div>
-    <div class="conn">
-      <span id="modeBadge" class="badge">LIVE</span>
-      <span id="connDot" class="dot"></span>
+    <div class="sep"></div>
+    <div class="dd">
+      <button class="tb" id="btnType" title="Jenis chart"><svg><use href="#i-candles"/></svg><span id="typeName" class="hide-sm">Candle</span></button>
+      <div class="menu hidden" id="typeMenu"></div>
     </div>
+    <button class="tb" id="btnInd" title="Indikator"><b class="fx">ƒx</b><span class="hide-sm">Indikator</span></button>
+    <button class="tb" id="btnAlertQuick" title="Alert pada harga semasa"><svg><use href="#i-bell"/></svg><span class="hide-sm">Alert</span></button>
+    <button class="tb" id="btnSignals" title="Tanda signal EMA cross / RSI"><svg><use href="#i-pulse"/></svg><span class="hide-sm">Signal</span></button>
+    <div class="spacer"></div>
+    <button class="tb icon" id="btnUndo" title="Undo (Ctrl+Z)"><svg><use href="#i-undo"/></svg></button>
+    <button class="tb icon" id="btnShot" title="Snapshot chart"><svg><use href="#i-camera"/></svg></button>
+    <button class="tb icon hide-sm" id="btnFull" title="Skrin penuh"><svg><use href="#i-full"/></svg></button>
+    <span id="modeBadge" class="badge">LIVE</span><span id="connDot" class="dot"></span>
   </header>
 
-  <nav class="watch" id="watchlist"></nav>
+  <div class="body">
+    <nav class="drawbar" id="drawbar">
+      <button data-tool="cursor" class="on" title="Kursor (Esc)"><svg><use href="#i-cursor"/></svg></button>
+      <button data-tool="trend" title="Trend line"><svg><use href="#i-trend"/></svg></button>
+      <button data-tool="ray" title="Ray"><svg><use href="#i-ray"/></svg></button>
+      <button data-tool="hline" title="Garisan mendatar"><svg><use href="#i-hline"/></svg></button>
+      <button data-tool="vline" title="Garisan menegak"><svg><use href="#i-vline"/></svg></button>
+      <button data-tool="rect" title="Kotak / zon"><svg><use href="#i-rect"/></svg></button>
+      <button data-tool="fib" title="Fibonacci retracement"><svg><use href="#i-fib"/></svg></button>
+      <button data-tool="long" title="Long position"><svg><use href="#i-long"/></svg></button>
+      <button data-tool="short" title="Short position"><svg><use href="#i-short"/></svg></button>
+      <button data-tool="measure" title="Ukur julat harga"><svg><use href="#i-measure"/></svg></button>
+      <button data-tool="text" title="Teks"><svg><use href="#i-text"/></svg></button>
+      <div class="grow"></div>
+      <button id="btnMagnet" title="Magnet: lekat ke OHLC"><svg><use href="#i-magnet"/></svg></button>
+      <button id="btnHide" title="Sorok semua lukisan"><svg><use href="#i-eye"/></svg></button>
+      <button id="btnClearDraw" title="Padam semua lukisan"><svg><use href="#i-trash"/></svg></button>
+    </nav>
 
-  <main class="layout">
-    <section class="chart-wrap">
-      <div class="chart-tools">
-        <button class="chip on" data-toggle="ema">EMA 20/50/200</button>
-        <button class="chip on" data-toggle="rsi">RSI 14</button>
-        <button class="chip on" data-toggle="signals">Signal auto</button>
-        <button class="chip accent" id="btnSuggest">⚡ Cadang setup</button>
-      </div>
+    <section class="chart-area">
       <div id="legend" class="legend"></div>
+      <div id="paneLegends"></div>
+      <div id="chart" class="chart"></div>
+      <div id="selBar" class="selbar hidden"></div>
       <div id="pickBanner" class="pick-banner hidden"></div>
-      <div id="mainChart" class="main-chart"></div>
-      <div id="rsiChart" class="rsi-chart"></div>
+      <button id="btnRealtime" class="realtime hidden" title="Ke candle terkini">»</button>
     </section>
 
-    <aside class="panel">
-      <div class="tabs" id="tabs">
-        <button data-tab="setup" class="on">Setup</button>
-        <button data-tab="open">Pantau <span id="openCount" class="count">0</span></button>
-        <button data-tab="alerts">Alert</button>
-        <button data-tab="journal">Jurnal</button>
-        <button data-tab="settings">⚙</button>
+    <aside class="side" id="side">
+      <div class="side-panel">
+        <!-- WATCHLIST -->
+        <div class="tab-body" data-body="watch">
+          <div class="ph"><b>Watchlist</b><button class="btn small" id="btnAddWatch" title="Tambah pair semasa">＋ Tambah</button></div>
+          <div class="wl-head"><span>Simbol</span><span>Harga</span><span>Ubah%</span></div>
+          <div id="watchlist" class="wl-list"></div>
+          <div id="symDetail" class="sym-detail"></div>
+        </div>
+
+        <!-- SETUP BUILDER -->
+        <div class="tab-body hidden" data-body="setup">
+          <div class="ph"><b>Bina setup</b><button class="btn small accent" id="btnSuggest">⚡ Cadang</button></div>
+          <div class="seg" id="dirSeg">
+            <button data-dir="long" class="on long">LONG / BUY</button>
+            <button data-dir="short" class="short">SHORT / SELL</button>
+          </div>
+          <div class="seg small" id="typeSeg">
+            <button data-type="limit" class="on">Tunggu harga</button>
+            <button data-type="market">Masuk sekarang</button>
+          </div>
+          <div class="field" data-f="entry"><label>Entry</label><input type="number" step="any" inputmode="decimal" id="fEntry"><button class="pick" data-pick="entry" title="Klik pada chart">🎯</button><button class="pick" id="btnNow">Now</button></div>
+          <div class="field" data-f="sl"><label class="neg">Stop Loss</label><input type="number" step="any" inputmode="decimal" id="fSl"><button class="pick" data-pick="sl">🎯</button></div>
+          <div class="field" data-f="tp1"><label class="pos">TP1</label><input type="number" step="any" inputmode="decimal" id="fTp1"><button class="pick" data-pick="tp1">🎯</button></div>
+          <div class="field" data-f="tp2"><label class="pos">TP2 (pilihan)</label><input type="number" step="any" inputmode="decimal" id="fTp2" placeholder="kosong = tiada"><button class="pick" data-pick="tp2">🎯</button></div>
+          <label class="check"><input type="checkbox" id="fBE" checked> SL ke breakeven bila TP1 kena (50% tutup di TP1)</label>
+          <textarea id="fNote" rows="2" placeholder="Nota setup (cth: retest support + RSI divergence)"></textarea>
+          <div class="calc" id="calc"></div>
+          <div class="row"><button class="btn primary" id="btnSave">Simpan &amp; pantau</button><button class="btn" id="btnClear">Kosongkan</button></div>
+          <p class="muted">Tip: guna tool <b>Long/Short position</b> di bar kiri, kemudian tekan "Pantau" untuk tukar jadi setup.</p>
+        </div>
+
+        <!-- OPEN SETUPS -->
+        <div class="tab-body hidden" data-body="open">
+          <div class="ph"><b>Setup dipantau</b></div>
+          <div id="openList" class="list"></div>
+        </div>
+
+        <!-- ALERTS -->
+        <div class="tab-body hidden" data-body="alerts">
+          <div class="ph"><b>Alert harga</b></div>
+          <div class="field"><label>Harga</label><input type="number" step="any" inputmode="decimal" id="fAlert"><button class="pick" data-pick="alert">🎯</button><button class="btn small primary" id="btnAddAlert">Tambah</button></div>
+          <div id="alertList" class="list"></div>
+          <h4>Log notifikasi</h4>
+          <div id="logList" class="list log"></div>
+        </div>
+
+        <!-- JOURNAL -->
+        <div class="tab-body hidden" data-body="journal">
+          <div class="ph"><b>Jurnal</b><button class="btn small ghost" id="btnClearJournal">Padam</button></div>
+          <div id="stats" class="stats"></div>
+          <div id="journalList" class="list"></div>
+        </div>
+
+        <!-- SETTINGS -->
+        <div class="tab-body hidden" data-body="settings">
+          <div class="ph"><b>Tetapan</b></div>
+          <div class="field"><label>Modal (USD)</label><input type="number" step="any" id="sBalance"></div>
+          <div class="field"><label>Risk / trade (%)</label><input type="number" step="0.1" id="sRisk"></div>
+          <label class="check"><input type="checkbox" id="sSound"> Bunyi notifikasi</label>
+          <label class="check"><input type="checkbox" id="sAutoSignal"> Notifikasi signal auto (EMA cross / RSI)</label>
+          <label class="check"><input type="checkbox" id="sDemo"> Mod demo (data simulasi)</label>
+          <button class="btn" id="btnNotif">Aktifkan notifikasi browser</button>
+          <p class="muted">Data live dari Binance spot. PAXGUSDT ≈ harga emas. Semua data disimpan dalam browser ni. Pemantauan jalan selagi tab terbuka.</p>
+          <p class="muted">Shortcut: taip nama pair terus untuk cari · Esc batal · Del padam lukisan · Ctrl+Z undo · Alt+T trend · Alt+H mendatar · Alt+F fib</p>
+        </div>
       </div>
 
-      <!-- SETUP BUILDER -->
-      <div class="tab-body" data-body="setup">
-        <div class="seg" id="dirSeg">
-          <button data-dir="long" class="on long">LONG / BUY</button>
-          <button data-dir="short" class="short">SHORT / SELL</button>
-        </div>
-        <div class="seg small" id="typeSeg">
-          <button data-type="limit" class="on">Tunggu harga (limit/stop)</button>
-          <button data-type="market">Masuk sekarang</button>
-        </div>
-
-        <div class="field" data-f="entry">
-          <label>Entry</label>
-          <input type="number" step="any" inputmode="decimal" id="fEntry" placeholder="harga entry">
-          <button class="pick" data-pick="entry" title="Klik pada chart">🎯</button>
-          <button class="pick" id="btnNow" title="Harga semasa">Now</button>
-        </div>
-        <div class="field" data-f="sl">
-          <label class="neg">Stop Loss</label>
-          <input type="number" step="any" inputmode="decimal" id="fSl" placeholder="harga SL">
-          <button class="pick" data-pick="sl">🎯</button>
-        </div>
-        <div class="field" data-f="tp1">
-          <label class="pos">Take Profit 1</label>
-          <input type="number" step="any" inputmode="decimal" id="fTp1" placeholder="harga TP1">
-          <button class="pick" data-pick="tp1">🎯</button>
-        </div>
-        <div class="field" data-f="tp2">
-          <label class="pos">TP2 (pilihan)</label>
-          <input type="number" step="any" inputmode="decimal" id="fTp2" placeholder="kosong = tiada">
-          <button class="pick" data-pick="tp2">🎯</button>
-        </div>
-        <label class="check"><input type="checkbox" id="fBE" checked> Alih SL ke breakeven bila TP1 kena (50% ditutup di TP1)</label>
-        <textarea id="fNote" rows="2" placeholder="Nota setup (cth: retest support + RSI divergence)"></textarea>
-
-        <div class="calc" id="calc"></div>
-        <div class="row">
-          <button class="btn primary" id="btnSave">Simpan &amp; pantau</button>
-          <button class="btn" id="btnClear">Kosongkan</button>
-        </div>
-      </div>
-
-      <!-- OPEN SETUPS -->
-      <div class="tab-body hidden" data-body="open">
-        <div id="openList" class="list"></div>
-      </div>
-
-      <!-- ALERTS -->
-      <div class="tab-body hidden" data-body="alerts">
-        <div class="field">
-          <label>Harga</label>
-          <input type="number" step="any" inputmode="decimal" id="fAlert" placeholder="harga alert">
-          <button class="pick" data-pick="alert">🎯</button>
-          <button class="btn small primary" id="btnAddAlert">Tambah</button>
-        </div>
-        <div id="alertList" class="list"></div>
-        <h4>Log notifikasi</h4>
-        <div id="logList" class="list log"></div>
-      </div>
-
-      <!-- JOURNAL -->
-      <div class="tab-body hidden" data-body="journal">
-        <div id="stats" class="stats"></div>
-        <div id="journalList" class="list"></div>
-        <button class="btn small ghost" id="btnClearJournal">Padam jurnal</button>
-      </div>
-
-      <!-- SETTINGS -->
-      <div class="tab-body hidden" data-body="settings">
-        <div class="field"><label>Modal akaun (USD)</label><input type="number" step="any" id="sBalance"></div>
-        <div class="field"><label>Risk setiap trade (%)</label><input type="number" step="0.1" id="sRisk"></div>
-        <label class="check"><input type="checkbox" id="sSound"> Bunyi bila ada notifikasi</label>
-        <label class="check"><input type="checkbox" id="sAutoSignal"> Notifikasi signal auto (EMA cross / RSI)</label>
-        <button class="btn" id="btnNotif">Aktifkan notifikasi browser</button>
-        <div class="field"><label>Tambah pair</label><input type="text" id="sAddSym" placeholder="cth: DOGEUSDT"><button class="btn small" id="btnAddSym">Tambah</button></div>
-        <label class="check"><input type="checkbox" id="sDemo"> Mod demo (data simulasi, tak perlu internet)</label>
-        <p class="muted">Data live dari Binance (spot). PAXGUSDT ≈ harga emas (XAU). Semua setup disimpan dalam browser ni sahaja. Pemantauan jalan selagi tab ni terbuka.</p>
-      </div>
+      <nav class="rail" id="rail">
+        <button data-tab="watch" class="on" title="Watchlist"><svg><use href="#i-list"/></svg><span>Watch</span></button>
+        <button data-tab="setup" title="Setup"><svg><use href="#i-target"/></svg><span>Setup</span></button>
+        <button data-tab="open" title="Dipantau"><svg><use href="#i-pulse"/></svg><span>Pantau</span><i id="openCount" class="count hidden">0</i></button>
+        <button data-tab="alerts" title="Alert"><svg><use href="#i-bell"/></svg><span>Alert</span></button>
+        <button data-tab="journal" title="Jurnal"><svg><use href="#i-book"/></svg><span>Jurnal</span></button>
+        <button data-tab="settings" title="Tetapan"><svg><use href="#i-gear"/></svg><span>Tetapan</span></button>
+      </nav>
     </aside>
-  </main>
+  </div>
+
+  <footer class="bottombar">
+    <span id="clock" class="muted"></span>
+    <div class="spacer"></div>
+    <button class="tb small" id="btnScalePct" title="Skala peratus">%</button>
+    <button class="tb small" id="btnScaleLog" title="Skala log">log</button>
+    <button class="tb small" id="btnScaleAuto" title="Auto-fit">auto</button>
+  </footer>
+
+  <!-- symbol search -->
+  <div class="modal hidden" id="symModal">
+    <div class="dialog">
+      <div class="dlg-hd"><b>Cari simbol</b><button class="x" data-close>✕</button></div>
+      <input id="symQuery" class="search" placeholder="cth: BTC, SOL, PEPE…" autocomplete="off">
+      <div class="seg small" id="quoteSeg"><button data-q="USDT" class="on">USDT</button><button data-q="USDC">USDC</button><button data-q="BTC">BTC</button><button data-q="">Semua</button></div>
+      <div id="symResults" class="results"></div>
+    </div>
+  </div>
+
+  <!-- indicators -->
+  <div class="modal hidden" id="indModal">
+    <div class="dialog">
+      <div class="dlg-hd"><b>Indikator</b><button class="x" data-close>✕</button></div>
+      <input id="indQuery" class="search" placeholder="Cari indikator…" autocomplete="off">
+      <div id="indResults" class="results"></div>
+    </div>
+  </div>
+
+  <!-- indicator settings -->
+  <div class="modal hidden" id="indSetModal">
+    <div class="dialog small">
+      <div class="dlg-hd"><b id="indSetTitle">Tetapan</b><button class="x" data-close>✕</button></div>
+      <div id="indSetBody" class="ind-set"></div>
+      <div class="row"><button class="btn primary" id="indSetSave">OK</button><button class="btn" data-close>Batal</button></div>
+    </div>
+  </div>
 
   <div id="toasts" class="toasts"></div>
 
   <script src="lib/lightweight-charts.standalone.production.js"></script>
+  <script src="js/indicators.js"></script>
+  <script src="js/drawings.js"></script>
   <script src="js/app.js"></script>
 </body>
 </html>
