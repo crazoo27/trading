@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="ms">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0b0e14">
+  <title>TradeDesk</title>
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">TradeDesk</div>
+    <div class="sym-box">
+      <span id="symName" class="sym-name">BTCUSDT</span>
+      <span id="lastPrice" class="last-price">—</span>
+      <span id="lastChange" class="chg">—</span>
+    </div>
+    <div class="intervals" id="intervals"></div>
+    <div class="conn">
+      <span id="modeBadge" class="badge">LIVE</span>
+      <span id="connDot" class="dot"></span>
+    </div>
+  </header>
+
+  <nav class="watch" id="watchlist"></nav>
+
+  <main class="layout">
+    <section class="chart-wrap">
+      <div class="chart-tools">
+        <button class="chip on" data-toggle="ema">EMA 20/50/200</button>
+        <button class="chip on" data-toggle="rsi">RSI 14</button>
+        <button class="chip on" data-toggle="signals">Signal auto</button>
+        <button class="chip accent" id="btnSuggest">⚡ Cadang setup</button>
+      </div>
+      <div id="legend" class="legend"></div>
+      <div id="pickBanner" class="pick-banner hidden"></div>
+      <div id="mainChart" class="main-chart"></div>
+      <div id="rsiChart" class="rsi-chart"></div>
+    </section>
+
+    <aside class="panel">
+      <div class="tabs" id="tabs">
+        <button data-tab="setup" class="on">Setup</button>
+        <button data-tab="open">Pantau <span id="openCount" class="count">0</span></button>
+        <button data-tab="alerts">Alert</button>
+        <button data-tab="journal">Jurnal</button>
+        <button data-tab="settings">⚙</button>
+      </div>
+
+      <!-- SETUP BUILDER -->
+      <div class="tab-body" data-body="setup">
+        <div class="seg" id="dirSeg">
+          <button data-dir="long" class="on long">LONG / BUY</button>
+          <button data-dir="short" class="short">SHORT / SELL</button>
+        </div>
+        <div class="seg small" id="typeSeg">
+          <button data-type="limit" class="on">Tunggu harga (limit/stop)</button>
+          <button data-type="market">Masuk sekarang</button>
+        </div>
+
+        <div class="field" data-f="entry">
+          <label>Entry</label>
+          <input type="number" step="any" inputmode="decimal" id="fEntry" placeholder="harga entry">
+          <button class="pick" data-pick="entry" title="Klik pada chart">🎯</button>
+          <button class="pick" id="btnNow" title="Harga semasa">Now</button>
+        </div>
+        <div class="field" data-f="sl">
+          <label class="neg">Stop Loss</label>
+          <input type="number" step="any" inputmode="decimal" id="fSl" placeholder="harga SL">
+          <button class="pick" data-pick="sl">🎯</button>
+        </div>
+        <div class="field" data-f="tp1">
+          <label class="pos">Take Profit 1</label>
+          <input type="number" step="any" inputmode="decimal" id="fTp1" placeholder="harga TP1">
+          <button class="pick" data-pick="tp1">🎯</button>
+        </div>
+        <div class="field" data-f="tp2">
+          <label class="pos">TP2 (pilihan)</label>
+          <input type="number" step="any" inputmode="decimal" id="fTp2" placeholder="kosong = tiada">
+          <button class="pick" data-pick="tp2">🎯</button>
+        </div>
+        <label class="check"><input type="checkbox" id="fBE" checked> Alih SL ke breakeven bila TP1 kena (50% ditutup di TP1)</label>
+        <textarea id="fNote" rows="2" placeholder="Nota setup (cth: retest support + RSI divergence)"></textarea>
+
+        <div class="calc" id="calc"></div>
+        <div class="row">
+          <button class="btn primary" id="btnSave">Simpan &amp; pantau</button>
+          <button class="btn" id="btnClear">Kosongkan</button>
+        </div>
+      </div>
+
+      <!-- OPEN SETUPS -->
+      <div class="tab-body hidden" data-body="open">
+        <div id="openList" class="list"></div>
+      </div>
+
+      <!-- ALERTS -->
+      <div class="tab-body hidden" data-body="alerts">
+        <div class="field">
+          <label>Harga</label>
+          <input type="number" step="any" inputmode="decimal" id="fAlert" placeholder="harga alert">
+          <button class="pick" data-pick="alert">🎯</button>
+          <button class="btn small primary" id="btnAddAlert">Tambah</button>
+        </div>
+        <div id="alertList" class="list"></div>
+        <h4>Log notifikasi</h4>
+        <div id="logList" class="list log"></div>
+      </div>
+
+      <!-- JOURNAL -->
+      <div class="tab-body hidden" data-body="journal">
+        <div id="stats" class="stats"></div>
+        <div id="journalList" class="list"></div>
+        <button class="btn small ghost" id="btnClearJournal">Padam jurnal</button>
+      </div>
+
+      <!-- SETTINGS -->
+      <div class="tab-body hidden" data-body="settings">
+        <div class="field"><label>Modal akaun (USD)</label><input type="number" step="any" id="sBalance"></div>
+        <div class="field"><label>Risk setiap trade (%)</label><input type="number" step="0.1" id="sRisk"></div>
+        <label class="check"><input type="checkbox" id="sSound"> Bunyi bila ada notifikasi</label>
+        <label class="check"><input type="checkbox" id="sAutoSignal"> Notifikasi signal auto (EMA cross / RSI)</label>
+        <button class="btn" id="btnNotif">Aktifkan notifikasi browser</button>
+        <div class="field"><label>Tambah pair</label><input type="text" id="sAddSym" placeholder="cth: DOGEUSDT"><button class="btn small" id="btnAddSym">Tambah</button></div>
+        <label class="check"><input type="checkbox" id="sDemo"> Mod demo (data simulasi, tak perlu internet)</label>
+        <p class="muted">Data live dari Binance (spot). PAXGUSDT ≈ harga emas (XAU). Semua setup disimpan dalam browser ni sahaja. Pemantauan jalan selagi tab ni terbuka.</p>
+      </div>
+    </aside>
+  </main>
+
+  <div id="toasts" class="toasts"></div>
+
+  <script src="lib/lightweight-charts.standalone.production.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
