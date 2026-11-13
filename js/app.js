@@ -20,8 +20,6 @@
 
   const INTERVALS = ['1m', '3m', '5m', '15m', '30m', '1h', '2h', '4h', '1d', '1w'];
   const INTERVAL_SEC = { '1m': 60, '3m': 180, '5m': 300, '15m': 900, '30m': 1800, '1h': 3600, '2h': 7200, '4h': 14400, '1d': 86400, '1w': 604800 };
-  const REST_BASES = ['https://api.binance.com', 'https://data-api.binance.vision'];
-  const WS_BASES = ['wss://stream.binance.com:9443', 'wss://data-stream.binance.vision'];
   const TZ_SHIFT = -new Date().getTimezoneOffset() * 60;
   const CHART_TYPES = { candles: 'Candle', hollow: 'Candle kosong', bars: 'Bar', heikin: 'Heikin Ashi', line: 'Garisan', area: 'Kawasan' };
   const UP = '#089981', DN = '#f23645';
@@ -40,7 +38,10 @@
     sound: saved.sound ?? true,
     autoSignal: saved.autoSignal ?? true,
     showSignals: saved.showSignals ?? (saved.show ? saved.show.signals : true),
-    demo: saved.demo ?? false,
+    // mod demo yang dihidupkan secara auto (sebab gagal sambung) tidak dikekalkan: cuba live semula setiap kali buka
+    demo: saved.demoManual ? !!saved.demo : false,
+    demoManual: saved.demoManual ?? false,
+    source: saved.source || null,
     magnet: saved.magnet ?? false,
     hideDrawings: false,
     priceMode: saved.priceMode || 0,
@@ -59,7 +60,7 @@
 
   const persist = () => store.save({
     symbol: S.symbol, interval: S.interval, chartType: S.chartType, watch: S.watch, indicators: S.indicators, drawings: S.drawings,
-    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo,
+    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source,
     magnet: S.magnet, priceMode: S.priceMode, sideTab: S.sideTab, sideCollapsed: S.sideCollapsed,
     setups: S.setups, alerts: S.alerts, log: S.log.slice(0, 100),
   });
@@ -271,7 +272,7 @@
   }
   function buildLegend() {
     $('#legend').innerHTML =
-      `<div class="main"><span class="title">${esc(S.symbol)} · ${S.interval} · Binance</span><span class="ohlc" id="lgOhlc"></span></div>` +
+      `<div class="main"><span class="title">${esc(S.symbol)} · ${S.interval} · ${sourceLabel()}</span><span class="ohlc" id="lgOhlc"></span></div>` +
       indRT.filter(r => r.def.overlay).map(indRow).join('');
     $('#paneLegends').innerHTML = indRT.filter(r => !r.def.overlay).map(r => `<div class="pane-legend" data-pane="${r.pane}">${indRow(r)}</div>`).join('');
     requestAnimationFrame(() => requestAnimationFrame(positionPaneLegends));
@@ -399,25 +400,9 @@
   }
 
   // ---------- data feed ----------
-  let klineWs = null, tickWs = null, demoTimer = null, wsBaseIdx = 0, feedGen = 0;
+  let feed = null, klineClose = null, tickClose = null, demoTimer = null, feedGen = 0;
   const setConn = (ok) => { $('#connDot').className = 'dot ' + (ok ? 'ok' : 'bad'); };
-
-  async function fetchJson(path) {
-    let lastErr;
-    for (const base of REST_BASES) {
-      try {
-        // had masa 8 saat: kalau network sekat (bukan tolak), fetch boleh tergantung lama tanpa error
-        const ctl = new AbortController();
-        const timer = setTimeout(() => ctl.abort(), 8000);
-        const r = await fetch(base + path, { signal: ctl.signal }).finally(() => clearTimeout(timer));
-        if (r.ok) return await r.json();
-        lastErr = new Error('HTTP ' + r.status);
-        if (r.status === 400) break;
-      } catch (e) { lastErr = e; }
-    }
-    throw lastErr;
-  }
-  const parseKline = (k) => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] });
+  const sourceLabel = () => S.demo ? 'Demo' : feed ? feed.label : '…';
 
   async function loadSymbol() {
     const gen = ++feedGen;
@@ -426,24 +411,26 @@
     drawings.load(S.drawings[S.symbol]);
     buildLegend();
     if (S.demo) { startDemo(gen); return; }
-    $('#lgOhlc') && ($('#lgOhlc').textContent = 'Menyambung ke Binance…');
     try {
-      const raw = await fetchJson(`/api/v3/klines?symbol=${S.symbol}&interval=${S.interval}&limit=1000`);
+      const r = await TD.feeds.history(S.symbol, S.interval, S.source, (label) => {
+        if (gen === feedGen && $('#lgOhlc')) $('#lgOhlc').textContent = `Menyambung ke ${label}…`;
+      });
       if (gen !== feedGen) return;
-      S.candles = raw.map(parseKline);
-      afterLoad();
-      openKline(gen);
+      const changed = !feed || feed.id !== r.feed.id;
+      feed = r.feed; S.source = feed.id; persist();
+      S.candles = r.candles;
+      buildLegend(); afterLoad(); openKline(gen);
+      if (changed) { allSymbols = null; restartTickers(true); }
     } catch (e) {
       if (gen !== feedGen) return;
-      if (String(e.message).includes('400')) {
-        toast('Pair tak dijumpai', `${S.symbol} tiada di Binance spot.`, 'bad');
-        S.watch = S.watch.filter(s => s !== S.symbol);
-        S.symbol = S.watch[0] || 'BTCUSDT'; persist(); renderWatch(); loadSymbol();
+      if (e.notFound) {
+        toast('Pair tak dijumpai', `${S.symbol} tiada di sumber data yang boleh dicapai.`, 'bad');
+        if (S.symbol !== 'BTCUSDT') { S.symbol = 'BTCUSDT'; persist(); renderWatch(); loadSymbol(); }
         return;
       }
-      toast('Tak dapat sambung ke Binance', 'Tukar ke mod demo (data simulasi). Boleh tukar balik di Tetapan.', 'bad');
+      toast('Tak dapat sambung ke sumber data', 'Binance, OKX dan Coinbase semua gagal. Tukar ke mod demo. Semak internet, kemudian matikan mod demo di Tetapan.', 'bad');
       S.demo = true; $('#sDemo').checked = true; setModeBadge(); persist();
-      startDemo(gen); restartTickers(true);
+      buildLegend(); startDemo(gen); restartTickers(true);
     }
   }
   function afterLoad() {
@@ -462,31 +449,28 @@
   }
 
   function openKline(gen) {
-    const ws = new WebSocket(`${WS_BASES[wsBaseIdx]}/ws/${S.symbol.toLowerCase()}@kline_${S.interval}`);
-    klineWs = ws;
-    ws.onopen = () => setConn(true);
-    ws.onmessage = (ev) => {
-      const k = JSON.parse(ev.data).k; if (!k) return;
-      onKline({ time: Math.floor(k.t / 1000), open: +k.o, high: +k.h, low: +k.l, close: +k.c, volume: +k.v }, k.x);
-    };
-    ws.onclose = () => {
-      if (klineWs !== ws || gen !== feedGen) return;
-      setConn(false);
-      wsBaseIdx = (wsBaseIdx + 1) % WS_BASES.length;
-      setTimeout(() => { if (gen === feedGen) resync(gen); }, 2000);
-    };
-    ws.onerror = () => ws.close();
+    klineClose = feed.openKline(S.symbol, S.interval, {
+      onOpen: () => setConn(true),
+      onCandle: (c, closed) => { if (gen === feedGen) onKline(c, closed); },
+      lastCandle: () => S.candles[S.candles.length - 1],
+      onClose: () => {
+        if (gen !== feedGen) return;
+        setConn(false);
+        setTimeout(() => { if (gen === feedGen) resync(gen); }, 2000);
+      },
+    });
   }
+  // lepas putus sambungan: tarik balik candle yang terlepas, kemudian sambung semula
   async function resync(gen) {
     try {
-      const raw = await fetchJson(`/api/v3/klines?symbol=${S.symbol}&interval=${S.interval}&limit=1000`);
+      const c = await feed.history(S.symbol, S.interval);
       if (gen !== feedGen) return;
-      S.candles = raw.map(parseKline); renderAll(); drawLines();
+      S.candles = c; renderAll(); drawLines();
     } catch { /* cuba lagi */ }
     if (gen === feedGen) openKline(gen);
   }
   function closeKline() {
-    if (klineWs) { const w = klineWs; klineWs = null; w.onclose = null; try { w.close(); } catch {} }
+    if (klineClose) { const f = klineClose; klineClose = null; f(); }
     clearInterval(demoTimer); demoTimer = null;
   }
 
@@ -531,22 +515,19 @@
   let tickKey = '';
   function restartTickers(force) {
     const syms = tickerSymbols();
-    const key = (S.demo ? 'demo:' : '') + syms.join(',');
-    if (!force && key === tickKey && (tickWs || S.demo)) return;
+    const key = (S.demo ? 'demo' : feed ? feed.id : '-') + ':' + syms.join(',');
+    if (!force && key === tickKey) return;
     tickKey = key;
-    if (tickWs) { const w = tickWs; tickWs = null; w.onclose = null; try { w.close(); } catch {} }
-    if (S.demo) return;
-    const ws = new WebSocket(`${WS_BASES[wsBaseIdx]}/stream?streams=${syms.map(s => s.toLowerCase() + '@miniTicker').join('/')}`);
-    tickWs = ws;
-    ws.onmessage = (ev) => {
-      const d = JSON.parse(ev.data).data; if (!d) return;
-      const price = +d.c;
-      S.tickers[d.s] = { price, open: +d.o, high: +d.h, low: +d.l, qvol: +d.q };
-      if (d.s !== S.symbol) onPrice(d.s, price, price, price);
-      scheduleUi();
-    };
-    ws.onclose = () => { if (tickWs === ws) { tickWs = null; setTimeout(() => restartTickers(true), 3000); } };
-    ws.onerror = () => ws.close();
+    if (tickClose) { const f = tickClose; tickClose = null; f(); }
+    if (S.demo || !feed) return;
+    tickClose = feed.openTickers(syms, {
+      onTick: (sym, t) => {
+        S.tickers[sym] = t;
+        if (sym !== S.symbol) onPrice(sym, t.price, t.price, t.price);
+        scheduleUi();
+      },
+      onClose: () => { tickClose = null; setTimeout(() => restartTickers(true), 3000); },
+    });
   }
 
   // ---------- demo feed ----------
@@ -911,7 +892,7 @@
   async function loadSymbols() {
     if (allSymbols) return;
     if (S.demo) { allSymbols = Object.entries(DEMO_BASE).map(([s, p]) => ({ s, p })); return; }
-    try { allSymbols = (await fetchJson('/api/v3/ticker/price')).map(x => ({ s: x.symbol, p: +x.price })).filter(x => x.p > 0); }
+    try { if (!feed) throw new Error('tiada sumber'); allSymbols = await feed.symbols(); }
     catch { allSymbols = S.watch.map(s => ({ s, p: S.tickers[s]?.price })); }
   }
   function openModal(id) { $$('.modal').forEach(m => m.classList.add('hidden')); $(id).classList.remove('hidden'); }
@@ -1119,7 +1100,7 @@
   $('#sRisk').oninput = e => { const v = num(e.target.value); if (v > 0 && v <= 100) { S.riskPct = v; persist(); renderCalc(); drawings.redraw(); } };
   $('#sSound').onchange = e => { S.sound = e.target.checked; persist(); if (S.sound) beep('info'); };
   $('#sAutoSignal').onchange = e => { S.autoSignal = e.target.checked; persist(); };
-  $('#sDemo').onchange = e => { S.demo = e.target.checked; persist(); setModeBadge(); S.tickers = {}; allSymbols = null; restartTickers(true); loadSymbol(); };
+  $('#sDemo').onchange = e => { S.demo = e.target.checked; S.demoManual = S.demo; persist(); setModeBadge(); S.tickers = {}; allSymbols = null; restartTickers(true); loadSymbol(); };
   $('#btnNotif').onclick = async () => {
     if (!('Notification' in window)) { toast('Tak disokong', 'Browser ni tak sokong notifikasi.', 'bad'); return; }
     const p = await Notification.requestPermission();
