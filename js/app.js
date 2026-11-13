@@ -1140,6 +1140,7 @@
     $$('#rail button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.sideTab && !S.sideCollapsed));
     $$('.tab-body').forEach(b => b.classList.toggle('hidden', b.dataset.body !== S.sideTab));
     renderUi();
+    if (S.sideTab === 'ana' && !S.sideCollapsed && typeof scheduleAnalysis === 'function') scheduleAnalysis();
     persist();
   }
 
@@ -1497,11 +1498,39 @@
       if (run !== anaRun || key !== `${S.symbol}|${S.interval}`) return; // pengguna dah tukar pair/TF
       htf.push({ tf, info: A.trendInfo(c) });
     }
-    const p = A.plan(S.candles, htf, { spotOnly: S.spotOnly });
+    const p = A.plan(S.candles, htf, { spotOnly: S.spotOnly, feePct: S.btFee });
     lastPlan = { ...p, symbol: S.symbol, interval: S.interval, htf };
     const z = p.zones;
     drawings.setZones(S.anaZones && z ? [...z.above, ...z.inside, ...z.below] : []);
     renderAnalysis(lastPlan);
+    if (!S.sideCollapsed && S.sideTab === 'ana') historyRecord(run, key, tfs);
+  }
+
+  // ---- rekod sejarah: berapa baik analisis yang SAMA prestasinya pada pair & TF ni sebelum ni ----
+  const recCache = new Map();
+  async function historyRecord(run, key, tfs) {
+    const el = () => $('#anaRec');
+    const lastT = S.candles.length ? S.candles[S.candles.length - 1].time : 0;
+    const cKey = `${key}|${S.spotOnly ? 's' : 'a'}|${S.btFee}`;
+    let hit = recCache.get(cKey);
+    if (!hit || lastT - hit.lastT > 8 * INTERVAL_SEC[S.interval]) {
+      if (el()) el().innerHTML = '<span class="muted">Menguji analisis ni pada sejarah pair ni…</span>';
+      const htfData = [];
+      for (const tf of tfs) htfData.push(await getHTF(tf));
+      const bt = await A.backtestPlan(S.candles.slice(), INTERVAL_SEC[S.interval], tfs.map(tf => INTERVAL_SEC[tf]),
+        { feePct: S.btFee, allowShort: !S.spotOnly, minGrade: 'B', htfData, yieldEvery: 40, cancelled: () => run !== anaRun });
+      if (!bt) return;
+      hit = { lastT, bt };
+      recCache.set(cKey, hit);
+    }
+    if (run !== anaRun || !el()) return;
+    const bt = hit.bt, j = A.judge(bt);
+    const days = Math.round((bt.to - bt.from) / 86400);
+    el().innerHTML = bt.n
+      ? `<b class="${bt.expectancy > 0 ? 'pos' : 'neg'}">${bt.n} setup lepas: win rate ${bt.winRate.toFixed(0)}%, purata ${fmtR(bt.expectancy)} setiap trade</b>
+         <span class="muted"> dalam ${days} hari (${esc(S.symbol)} ${esc(S.interval)}, yuran ${bt.feePct}%).</span>
+         <div class="rec-j ${j.level}">${esc(j.text)}</div>`
+      : `<span class="muted">Tiada setup gred A/B dalam ${days} hari sejarah ni. Analisis ni sangat memilih pada pair/TF ni.</span>`;
   }
 
   const DIR_TXT = { naik: '▲ Naik', turun: '▼ Turun', neutral: '◆ Neutral', julat: '◆ Berjulat' };
@@ -1517,19 +1546,21 @@
       : '⏸ TUNGGU, tiada setup berkualiti';
     let html = `<div class="card ana-verdict ${vCls}"><div class="v">${vTxt}</div>`;
     if (p.reasons.length) html += `<ul class="reasons">${p.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>`;
+    html += `<div class="rec"><div class="rec-h">📜 Rekod analisis ni pada sejarah</div><div id="anaRec"><span class="muted">…</span></div></div>`;
     html += `</div>`;
 
     if (p.entry != null) {
       const riskUsd = S.balance * S.riskPct / 100, qty = riskUsd / p.risk;
       html += `<div class="card"><div class="hd"><b>Pelan ${p.dir === 'long' ? 'Long' : 'Short'}</b><span class="muted">${p.zone ? esc(p.zone.name || '') : ''}</span></div>
         <div class="grid"><div>Entry<b>${fmt(p.entry, dec)}</b></div><div>SL<b class="neg">${fmt(p.sl, dec)}</b></div><div>TP1<b class="pos">${fmt(p.tp1, dec)}</b></div><div>TP2<b class="pos">${fmt(p.tp2, dec)}</b></div></div>
-        <div class="ana-kv"><span>R:R ke TP1</span><b>1 : ${p.rr.toFixed(2)}</b><span>Saiz posisi</span><b>${qty < 1 ? qty.toFixed(5) : qty.toFixed(2)} ${esc(splitSym(S.symbol)[0])}</b><span>Risiko</span><b class="neg">${fmtUsd(riskUsd)}</b><span>Untung jika TP1</span><b class="pos">${fmtUsd(riskUsd * p.rr)}</b></div>
+        <div class="ana-kv"><span>R:R ke TP1</span><b>1 : ${p.rr.toFixed(2)}</b><span>Saiz posisi</span><b>${qty < 1 ? qty.toFixed(5) : qty.toFixed(2)} ${esc(splitSym(S.symbol)[0])}</b><span>Risiko</span><b class="neg">${fmtUsd(riskUsd)}</b><span>Untung jika TP1</span><b class="pos">${fmtUsd(riskUsd * p.rr)}</b>${p.feeR ? `<span>Kos yuran (masuk+keluar)</span><b class="${p.feeR > 0.25 ? 'neg' : ''}">≈ ${p.feeR.toFixed(2)}R · ${fmtUsd(riskUsd * p.feeR)}</b>` : ''}</div>
         ${p.tpFromZone ? '' : '<div class="note">TP1 tiada zon jelas: guna 2R dari entry.</div>'}
         ${p.verdict !== 'TUNGGU' ? '<div class="acts"><button class="btn small primary" id="btnUsePlan">Guna pelan ni →</button></div>' : (p.grade ? '<div class="acts"><button class="btn small" id="btnUsePlan">Muat ke Setup (untuk kaji)</button></div>' : '')}
       </div>`;
     }
     if (p.checks.length) {
-      html += `<div class="card"><div class="hd"><b>Senarai semak (${p.score}/7)</b></div><ul class="checks">${p.checks.map(c => `<li class="${c.ok ? 'pos' : 'neg'}">${c.ok ? '✓' : '✗'} <span>${esc(c.text)}</span></li>`).join('')}</ul></div>`;
+      const ex = (p.extras || []).map(c => `<li class="${c.info ? 'muted' : c.ok ? 'pos' : 'neg'}">${c.info ? 'ℹ' : c.ok ? '＋' : '−'} <span>${esc(c.text)}</span></li>`).join('');
+      html += `<div class="card"><div class="hd"><b>Senarai semak (${p.score}/7)</b></div><ul class="checks">${p.checks.map(c => `<li class="${c.ok ? 'pos' : 'neg'}">${c.ok ? '✓' : '✗'} <span>${esc(c.text)}</span></li>`).join('')}${ex}</ul></div>`;
     }
     const htfRows = (p.htf || []).map(h => `<span>Trend ${esc(h.tf)}</span><b class="${dirCls(h.info?.dir)}">${h.info ? DIR_TXT[h.info.dir] + ` (${h.info.score > 0 ? '+' : ''}${h.info.score})` : 'tiada data'}</b>`).join('');
     html += `<div class="card"><div class="hd"><b>Keadaan pasaran</b><span class="muted">${esc(S.interval)}</span></div><div class="ana-kv">
@@ -1567,7 +1598,12 @@
   $('#anaZones').onchange = e => { S.anaZones = e.target.checked; persist(); if (S.anaZones) runAnalysis(); else drawings.setZones([]); };
 
   // ---- backtest ----
-  $('#btStrat').innerHTML = Object.entries(A.STRATS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
+  $('#btStrat').innerHTML =
+    `<option value="plan:B">🧠 Analisis TradeDesk (gred A &amp; B)</option><option value="plan:A">🧠 Analisis TradeDesk (gred A sahaja)</option>` +
+    Object.entries(A.STRATS).map(([k, v]) => `<option value="${k}">${esc(v)}</option>`).join('');
+  // R:R untuk analisis datang dari zon (bukan tetap), jadi pilihan R:R cuma untuk strategi mudah
+  $('#btStrat').onchange = () => $('#btRRRow').classList.toggle('hidden', $('#btStrat').value.startsWith('plan'));
+  $('#btRRRow').classList.toggle('hidden', $('#btStrat').value.startsWith('plan'));
   $('#btFee').value = S.btFee;
   $('#btFee').oninput = e => { const v = num(e.target.value); if (v != null && v >= 0 && v < 5) { S.btFee = v; persist(); } };
   function sparkline(curve) {
@@ -1578,10 +1614,32 @@
     const col = curve[curve.length - 1] >= 0 ? 'var(--up)' : 'var(--down)';
     return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="0" x2="${w}" y1="${y0}" y2="${y0}" stroke="var(--line)" stroke-dasharray="3 3"/><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
   }
-  $('#btnBt').onclick = () => {
-    if (S.candles.length < 250) { $('#btOut').innerHTML = '<div class="empty">Perlu sekurang-kurangnya 250 candle.</div>'; return; }
-    const bt = A.backtest(S.candles, $('#btStrat').value, { rr: +$('#btRR').value, slAtr: 1.5, feePct: S.btFee, allowShort: !S.spotOnly });
+  let btBusy = false;
+  $('#btnBt').onclick = async () => {
+    if (btBusy) return;
+    if (S.candles.length < 270) { $('#btOut').innerHTML = '<div class="empty">Perlu sekurang-kurangnya 270 candle.</div>'; return; }
+    const strat = $('#btStrat').value;
+    let bt;
+    if (strat.startsWith('plan')) {
+      btBusy = true;
+      const btn = $('#btnBt'), label = btn.textContent;
+      const sym = S.symbol, iv = S.interval, tfs = HTF[iv] || [];
+      try {
+        btn.textContent = 'Memuat data TF besar…';
+        const htfData = [];
+        for (const tf of tfs) htfData.push(await getHTF(tf));
+        bt = await A.backtestPlan(S.candles.slice(), INTERVAL_SEC[iv], tfs.map(tf => INTERVAL_SEC[tf]), {
+          feePct: S.btFee, allowShort: !S.spotOnly, minGrade: strat.split(':')[1], htfData, yieldEvery: 25,
+          onProgress: (f) => { btn.textContent = `Menguji… ${Math.round(f * 100)}%`; },
+          cancelled: () => sym !== S.symbol || iv !== S.interval,
+        });
+      } finally { btBusy = false; btn.textContent = label; }
+      if (!bt) return;
+    } else {
+      bt = A.backtest(S.candles, strat, { rr: +$('#btRR').value, slAtr: 1.5, feePct: S.btFee, allowShort: !S.spotOnly });
+    }
     const j = A.judge(bt);
+    const mc = A.monteCarlo(bt.trades.map(t => t.r));
     const days = ((bt.to - bt.from) / 86400).toFixed(0);
     const riskUsd = S.balance * S.riskPct / 100;
     const cell = (k, v, cls = '') => `<div class="stat"><b class="${cls}">${v}</b><span>${k}</span></div>`;
@@ -1593,11 +1651,83 @@
         ${cell('Rugi berturut maks', bt.maxLoseStreak)}${cell('Separuh 1', fmtR(bt.firstHalfR), bt.firstHalfR >= 0 ? 'pos' : 'neg')}${cell('Separuh 2', fmtR(bt.secondHalfR), bt.secondHalfR >= 0 ? 'pos' : 'neg')}
       </div>
       ${sparkline(bt.curve)}
-      <p class="muted">${days} hari data ${esc(S.symbol)} ${esc(S.interval)} · SL 1.5×ATR · yuran ${bt.feePct}%/transaksi${S.spotOnly ? ' · long sahaja (akaun spot)' : ''}.
+      ${bt.strat === 'plan' ? `<p class="muted">Analisis dijalankan pada ${bt.evals} candle: ${bt.signals} kali bagi isyarat (${(bt.signals / Math.max(1, bt.evals) * 100).toFixed(1)}%), ${bt.missed} terlepas (harga lari tanpa kena entry), ${bt.expired} tamat tempoh. Selebihnya: TUNGGU.</p>` : ''}
+      ${mc ? `<div class="card"><div class="hd"><b>🎲 Monte Carlo (${mc.runs} simulasi)</b></div>
+        <p class="muted" style="margin:0 0 6px">Urutan menang/kalah sebenar tak akan sama dengan sejarah. Ni julat yang munasabah untuk ${mc.n} trade seterusnya, pada risiko ${S.riskPct}% setiap trade:</p>
+        <div class="ana-kv">
+          <span>Drawdown biasa (median)</span><b class="neg">-${mc.dd50.toFixed(1)}R ≈ -${(mc.dd50 * S.riskPct).toFixed(1)}% modal</b>
+          <span>Drawdown teruk (1 dalam 20)</span><b class="neg">-${mc.dd95.toFixed(1)}R ≈ -${(mc.dd95 * S.riskPct).toFixed(1)}% modal</b>
+          <span>Rugi berturut (1 dalam 20)</span><b>${mc.streak95} kali</b>
+          <span>Keputusan median</span><b class="${mc.final50 >= 0 ? 'pos' : 'neg'}">${fmtR(mc.final50)}</b>
+          <span>Julat 90%</span><b>${fmtR(mc.final5)} hingga ${fmtR(mc.final95)}</b>
+          <span>Peluang akhirnya rugi</span><b class="${mc.probLoss > 0.3 ? 'neg' : ''}">${(mc.probLoss * 100).toFixed(0)}%</b>
+        </div>
+        ${mc.dd95 * S.riskPct > 20 ? `<div class="note neg">Pada risk ${S.riskPct}%, drawdown teruk boleh cecah ${(mc.dd95 * S.riskPct).toFixed(0)}% modal. Pertimbang turunkan risk setiap trade.</div>` : ''}
+      </div>` : ''}
+      <p class="muted">${days} hari data ${esc(S.symbol)} ${esc(S.interval)} · ${bt.strat === 'plan' ? 'SL & TP ikut zon analisis' : 'SL 1.5×ATR'} · yuran ${bt.feePct}%/transaksi${S.spotOnly ? ' · long sahaja (akaun spot)' : ''}.
       Pada risiko ${fmtUsd(riskUsd)} setiap trade, keputusan ≈ <b class="${bt.totalR >= 0 ? 'pos' : 'neg'}">${fmtUsd(bt.totalR * riskUsd)}</b>. Beli &amp; simpan dalam tempoh sama: <b class="${bt.buyHoldPct >= 0 ? 'pos' : 'neg'}">${bt.buyHoldPct >= 0 ? '+' : ''}${bt.buyHoldPct.toFixed(1)}%</b>.
       Yuran purata ${bt.avgCost.toFixed(2)}R setiap trade.
       ${bt.expectancy > 0 ? `Rugi ${bt.maxLoseStreak} kali berturut-turut pun berlaku dalam strategi yang untung: bersedia dari segi mental dan modal.` : ''}</p>`;
   };
+
+  // ---- imbas watchlist ----
+  // Ambil 300 candle sahaja setiap pair/TF (cukup untuk EMA200 + struktur) dan hadkan permintaan serentak
+  // supaya tak kena had kadar (rate limit) exchange.
+  async function pool(items, limit, fn) {
+    const out = new Array(items.length); let next = 0;
+    await Promise.all(Array.from({ length: Math.min(limit, items.length) }, async () => {
+      while (next < items.length) { const k = next++; out[k] = await fn(items[k], k); }
+    }));
+    return out;
+  }
+  let scanBusy = false;
+  $('#btnScan').onclick = async () => {
+    if (scanBusy) return;
+    if (S.demo || !feed) { $('#scanOut').innerHTML = '<div class="empty">Imbasan perlukan data live (bukan mod demo).</div>'; return; }
+    scanBusy = true;
+    const tf = $('#scanTf').value, tfs = HTF[tf] || [], f = feed, btn = $('#btnScan');
+    const syms = [...S.watch];
+    let done = 0;
+    btn.textContent = `0/${syms.length}`;
+    const fetched = new Map();
+    const hist = (sym, t) => {
+      const k = sym + '|' + t;
+      if (!fetched.has(k)) fetched.set(k, f.history(sym, t, { pages: 1 }).catch(() => null));
+      return fetched.get(k);
+    };
+    try {
+      const rows = await pool(syms, 2, async (sym) => {
+        const c = await hist(sym, tf);
+        let r = null;
+        if (c && c.length >= 60) {
+          const htf = [];
+          for (const t of tfs) { const h = await hist(sym, t); htf.push({ tf: t, info: h && h.length >= 60 ? A.trendInfo(h) : null }); }
+          r = A.plan(c, htf, { spotOnly: S.spotOnly, feePct: S.btFee });
+        }
+        btn.textContent = `${++done}/${syms.length}`;
+        return { sym, r };
+      });
+      const rank = (x) => !x.r || !x.r.info ? 9 : x.r.verdict === 'SETUP' ? (x.r.grade === 'A' ? 0 : 2) : x.r.verdict === 'PASANG LIMIT' ? (x.r.grade === 'A' ? 1 : 3) : 5 - (x.r.score || 0) / 10;
+      rows.sort((a, b) => rank(a) - rank(b) || (b.r?.score || 0) - (a.r?.score || 0));
+      $('#scanOut').innerHTML = rows.map(({ sym, r }) => {
+        if (!r || !r.info) return `<div class="card scan-row"><div class="hd"><b>${esc(sym)}</b><span class="muted">tiada data</span></div></div>`;
+        const tag = r.verdict === 'SETUP' ? `<span class="tag active">SETUP ${r.dir === 'long' ? 'LONG' : 'SHORT'} · ${r.grade}</span>`
+          : r.verdict === 'PASANG LIMIT' ? `<span class="tag pending">LIMIT ${r.dir === 'long' ? 'BUY' : 'SELL'} · ${r.grade}</span>`
+          : `<span class="tag">TUNGGU</span>`;
+        const why = r.verdict === 'TUNGGU' ? (r.reasons[0] || '').split(/[:.]\s/)[0] : `R:R 1:${r.rr.toFixed(1)} · ${r.score}/7 faktor`;
+        return `<div class="card scan-row" data-scan="${esc(sym)}" data-tf="${tf}"><div class="hd"><b>${esc(sym)} <span class="muted">${tf}</span></b>${tag}</div>
+          <div class="muted" style="font-size:12px"><span class="${dirCls(r.bias)}">${DIR_TXT[r.bias] || ''}</span> · ${esc(why)}</div></div>`;
+      }).join('') + `<p class="muted">Diimbas ${new Date().toLocaleTimeString('ms-MY', { hour: '2-digit', minute: '2-digit' })}. Tekan mana-mana pair untuk buka chart & analisis penuh.</p>`;
+    } finally { scanBusy = false; btn.textContent = '🔎 Imbas'; }
+  };
+  $('#scanOut').addEventListener('click', e => {
+    const row = e.target.closest('[data-scan]'); if (!row) return;
+    const sym = row.dataset.scan, tf = row.dataset.tf;
+    if (S.interval !== tf) { S.interval = tf; persist(); renderIntervals(); }
+    if (sym !== S.symbol) goSymbol(sym); else loadSymbol();
+    $('#anaOut').innerHTML = '<div class="empty">Menganalisa…</div>';
+    $('.side-panel').scrollTop = 0;
+  });
 
   // ---- had rugi harian ----
   $('#sDailyR').value = S.dailyR;

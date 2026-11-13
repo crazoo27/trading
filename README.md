@@ -51,6 +51,12 @@ Analisis berasaskan peraturan, ikut cara trader berpengalaman berfikir. **Bukan 
 - **Senarai semak 7 faktor + gred A/B/C**. Keputusan: SETUP, PASANG LIMIT (tunggu harga datang), atau TUNGGU (dengan sebab)
 - **Backtest**: 4 strategi pada data yang dimuat; masuk pada harga buka candle seterusnya, SL dikira dulu kalau SL & TP dalam candle sama, yuran ditolak. Tunjuk win rate, purata R, profit factor, drawdown, konsistensi dua separuh tempoh, dan perbandingan dengan beli & simpan. Diuji: pada data random walk semua strategi rugi selepas yuran (tiada "edge palsu")
 - **Had rugi harian** (Tetapan): bila rugi hari ini capai had (default 3R), setup baru perlu pengesahan
+- **Sedar yuran**: kalau yuran masuk+keluar makan lebih 0.25R (SL terlalu rapat untuk TF tu), keputusan jadi TUNGGU
+- **Divergence RSI & volume**: divergence menyokong +1 mata, melawan −1; volume relatif sebagai maklumat
+- **Rekod sejarah analisis**: setiap kali analisis dibuka, enjin yang SAMA diulang tayang candle demi candle pada sejarah pair/TF tu (tanpa intai masa depan, TF besar cuma candle yang dah tutup) dan tunjuk win rate & purata R sebenar
+- **Backtest "🧠 Analisis TradeDesk"** (gred A & B, atau A sahaja) di samping 4 strategi mudah
+- **Monte Carlo** (2000 simulasi): julat drawdown biasa & teruk dalam % modal, rugi berturut-turut, peluang akhirnya rugi
+- **Imbas watchlist**: analisis penuh pada semua pair (1h/4h/1d), disusun dari setup terbaik; tekan untuk buka
 
 ## Prestasi
 

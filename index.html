@@ -13,9 +13,9 @@
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <title>TradeDesk</title>
   <link rel="preconnect" href="https://www.okx.com" crossorigin>
-  <link rel="stylesheet" href="css/style.css?v=7">
+  <link rel="stylesheet" href="css/style.css?v=8">
   <!-- Mula minta data candle SEKARANG, sementara skrip chart yang besar masih dimuat turun dan diproses. -->
-  <script src="js/feeds.js?v=7"></script>
+  <script src="js/feeds.js?v=8"></script>
   <script>
     try {
       var st = JSON.parse(localStorage.getItem('tradedesk.v2') || '{}');
@@ -159,10 +159,15 @@
           <label class="check"><input type="checkbox" id="anaZones" checked> Papar zon support/resistance atas chart</label>
           <div id="anaOut" class="list"><div class="empty">Menganalisa…</div></div>
 
+          <h4>Imbas watchlist: cari setup terbaik</h4>
+          <p class="muted" style="margin:0">Jalankan analisis yang sama pada semua pair dalam watchlist. Trader berpengalaman pilih peluang terbaik, bukan paksa satu pair.</p>
+          <div class="row"><select id="scanTf" class="sel"><option value="1h">1h</option><option value="4h" selected>4h</option><option value="1d">1d</option></select><button class="btn" id="btnScan">🔎 Imbas</button></div>
+          <div id="scanOut" class="list"></div>
+
           <h4>Backtest: uji strategi pada data lama</h4>
           <p class="muted" style="margin:0">Guna candle yang sedang dimuat untuk pair &amp; timeframe ni. Timeframe 1h/4h bagi sejarah lebih panjang dan keputusan lebih boleh dipercayai.</p>
           <div class="field"><label>Strategi</label><select id="btStrat" class="sel"></select></div>
-          <div class="field"><label>Sasaran R:R</label><select id="btRR" class="sel"><option value="1.5">1 : 1.5</option><option value="2" selected>1 : 2</option><option value="3">1 : 3</option></select></div>
+          <div class="field" id="btRRRow"><label>Sasaran R:R</label><select id="btRR" class="sel"><option value="1.5">1 : 1.5</option><option value="2" selected>1 : 2</option><option value="3">1 : 3</option></select></div>
           <div class="field"><label>Yuran / transaksi (%)</label><input type="number" step="0.01" id="btFee" inputmode="decimal"></div>
           <button class="btn" id="btnBt">▶ Jalankan backtest</button>
           <div id="btOut"></div>
@@ -246,9 +251,9 @@
   <div id="toasts" class="toasts"></div>
 
   <script src="lib/lightweight-charts.standalone.production.js?v=5.3.0"></script>
-  <script src="js/indicators.js?v=7"></script>
-  <script src="js/analysis.js?v=7"></script>
-  <script src="js/drawings.js?v=7"></script>
-  <script src="js/app.js?v=7"></script>
+  <script src="js/indicators.js?v=8"></script>
+  <script src="js/analysis.js?v=8"></script>
+  <script src="js/drawings.js?v=8"></script>
+  <script src="js/app.js?v=8"></script>
 </body>
 </html>

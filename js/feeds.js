@@ -62,8 +62,8 @@ window.TD = window.TD || {};
       }
       throw last;
     },
-    async history(sym, iv) {
-      const raw = await this.get(`/api/v3/klines?symbol=${sym}&interval=${iv}&limit=1000`);
+    async history(sym, iv, o = {}) {
+      const raw = await this.get(`/api/v3/klines?symbol=${sym}&interval=${iv}&limit=${Math.min(1000, (o.pages || 4) * 300)}`);
       return raw.map(k => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
     },
     async symbols() {
@@ -103,11 +103,11 @@ window.TD = window.TD || {};
     },
     // 4 halaman (300 candle setiap satu) diminta SERENTAK: masa muat = satu permintaan, bukan empat berturut-turut.
     // Sempadan halaman dikira dari masa sekarang, bertindih 3 candle supaya tiada lompang; pendua dibuang.
-    async history(sym, iv) {
+    async history(sym, iv, o = {}) {
       const inst = okxInst(sym), bar = OKX_BAR[iv], sec = SEC[iv];
       const T = bucketOf(Math.floor(Date.now() / 1000), sec);
       const url = (k) => `/api/v5/market/candles?instId=${inst}&bar=${bar}&limit=300` + (k ? `&after=${(T - (300 * k - 3) * sec) * 1000}` : '');
-      const pages = await Promise.all([0, 1, 2, 3].map(k => this.get(url(k)).catch(e => { if (k === 0) throw e; return []; })));
+      const pages = await Promise.all([0, 1, 2, 3].slice(0, o.pages || 4).map(k => this.get(url(k)).catch(e => { if (k === 0) throw e; return []; })));
       const byTime = new Map();
       for (const d of pages) for (const r of d) byTime.set(r[0], r);
       if (!byTime.size) throw notFound();
@@ -165,10 +165,10 @@ window.TD = window.TD || {};
       }
       return this._products;
     },
-    async history(sym, iv) {
+    async history(sym, iv, o = {}) {
       const sec = SEC[iv], g = CB_G.find(x => x <= sec && sec % x === 0);
       const prod = cbProd(sym);
-      const pages = Math.min(4, Math.max(1, Math.ceil(600 * sec / g / 300)));
+      const pages = Math.min(o.pages || 4, 4, Math.max(1, Math.ceil(600 * sec / g / 300)));
       const now = Math.floor(Date.now() / 1000);
       // semua halaman diminta serentak (julat masa setiap halaman memang dah diketahui)
       const got = await Promise.all(Array.from({ length: pages }, (_, p) => {

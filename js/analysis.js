@@ -69,6 +69,24 @@ window.TD = window.TD || {};
     return { above, below, inside, tol };
   }
 
+  // ---------- divergence RSI ----------
+  // Bullish: harga buat low lebih rendah, tapi RSI buat low lebih tinggi (tekanan jual makin lemah).
+  // Bearish: harga buat high lebih tinggi, tapi RSI buat high lebih rendah (tekanan beli makin lemah).
+  function divergence(piv, rsiArr, n, lookback = 60) {
+    const lim = n - 1 - lookback;
+    const lows = piv.filter(p => p.type === 'L' && p.i >= lim), highs = piv.filter(p => p.type === 'H' && p.i >= lim);
+    let bull = null, bear = null;
+    if (lows.length >= 2) {
+      const a = lows[lows.length - 2], b = lows[lows.length - 1];
+      if (b.price < a.price && rsiArr[a.i] != null && rsiArr[b.i] != null && rsiArr[b.i] > rsiArr[a.i] + 2) bull = { a, b };
+    }
+    if (highs.length >= 2) {
+      const a = highs[highs.length - 2], b = highs[highs.length - 1];
+      if (b.price > a.price && rsiArr[a.i] != null && rsiArr[b.i] != null && rsiArr[b.i] < rsiArr[a.i] - 2) bear = { a, b };
+    }
+    return { bull, bear };
+  }
+
   // ---------- gambaran trend satu timeframe ----------
   function trendInfo(c) {
     const n = c.length, last = n - 1;
@@ -92,9 +110,13 @@ window.TD = window.TD || {};
     let atrAvg = 0, m = 0;
     for (let i = Math.max(0, n - 100); i < n; i++) if (a[i] != null) { atrAvg += a[i]; m++; }
     atrAvg = m ? atrAvg / m : a[last];
+    // volume relatif candle terakhir yang DAH tutup berbanding purata 20 candle sebelumnya
+    let relVol = null;
+    if (n > 22) { let s = 0; for (let i = n - 22; i < n - 2; i++) s += c[i].volume; relVol = s ? c[n - 2].volume / (s / 20) : null; }
     return {
       dir, score, px, e20: e20[last], e50: e50[last], e200: e200[last], rsi: r[last],
       atr: a[last], atrPct: a[last] / px * 100, er, volRatio: a[last] / atrAvg, st, piv,
+      div: divergence(piv, r, n), relVol,
     };
   }
 
@@ -137,7 +159,9 @@ window.TD = window.TD || {};
     const tp1 = targets[0] != null ? targets[0] : (L ? entry + 2 * risk : entry - 2 * risk);
     const tp2 = targets[1] != null ? targets[1] : (L ? entry + 3 * risk : entry - 3 * risk);
     const rr = Math.abs(tp1 - entry) / risk;
-    Object.assign(res, { entry, sl, tp1, tp2, rr, risk, tpFromZone: targets[0] != null });
+    // kos yuran (masuk + keluar) dalam unit R: SL rapat + yuran tinggi = untung dimakan yuran
+    const feeR = opts.feePct ? (opts.feePct / 100) * (entry + tp1) / risk : 0;
+    Object.assign(res, { entry, sl, tp1, tp2, rr, risk, feeR, tpFromZone: targets[0] != null });
 
     const htfOk = htfBias === bias;
     const add = (ok, text) => res.checks.push({ ok: !!ok, text });
@@ -148,7 +172,14 @@ window.TD = window.TD || {};
     add(L ? info.rsi < 70 : info.rsi > 30, `RSI tak melampau ke arah entry (${info.rsi.toFixed(0)})`);
     add(info.er >= 0.2, `Pasaran bergerak kemas, bukan berombak (ER ${info.er.toFixed(2)})`);
     add(info.volRatio >= 0.6 && info.volRatio <= 1.8, `Volatiliti normal (ATR ${info.volRatio.toFixed(2)}× purata)`);
-    const pass = res.checks.filter(x => x.ok).length;
+    let pass = res.checks.filter(x => x.ok).length;
+    // faktor tambahan: divergence menolak/menambah satu mata; volume sebagai maklumat
+    res.extras = [];
+    const div = info.div || {};
+    if (L ? div.bull : div.bear) { res.extras.push({ ok: true, text: `Divergence RSI ${L ? 'bullish' : 'bearish'}: momentum menyokong arah ni (+1)` }); pass++; }
+    if (L ? div.bear : div.bull) { res.extras.push({ ok: false, text: `Divergence RSI ${L ? 'bearish' : 'bullish'} melawan arah: momentum melemah (−1)` }); pass--; }
+    if (info.relVol != null) res.extras.push({ ok: info.relVol >= 1, info: true, text: `Volume candle terakhir ${info.relVol.toFixed(1)}× purata${info.relVol >= 1.5 ? ': penyertaan kuat' : info.relVol < 0.7 ? ': lemah, pergerakan kurang disokong' : ''}` });
+    pass = Math.max(0, Math.min(7, pass));
     res.score = pass;
     res.grade = pass >= 6 ? 'A' : pass >= 4 ? 'B' : 'C';
 
@@ -156,6 +187,7 @@ window.TD = window.TD || {};
     if (rr < 1.5) res.reasons.push(`R:R cuma 1:${rr.toFixed(2)}: resistance/support seterusnya terlalu dekat. Untung tak berbaloi dengan risiko.`);
     if (res.grade === 'C') res.reasons.push(`Cuma ${pass}/7 faktor selari. Terlalu sedikit untuk ambil risiko.`);
     if (!L && opts.spotOnly) res.reasons.push('Bias turun, tapi akaun spot tak boleh short. Duduk tepi atau tunggu trend berubah.');
+    if (feeR > 0.25) res.reasons.push(`Yuran ${opts.feePct}% makan ${feeR.toFixed(2)}R untuk SL serapat ni. Guna timeframe lebih besar (SL lebih jauh) supaya yuran jadi kecil.`);
 
     const dist = Math.abs(px - entry) / atr;
     if (res.reasons.length) res.verdict = 'TUNGGU';
@@ -257,15 +289,101 @@ window.TD = window.TD || {};
       avgCost: n ? trades.reduce((s, t) => s + (t.cost || 0), 0) / n : 0,
     };
   }
+  // ---------- backtest ENJIN ANALISIS itu sendiri (ulang tayang candle demi candle) ----------
+  // Pada setiap candle tanpa posisi, jalankan plan() hanya dengan data yang wujud SETAKAT candle tu
+  // (TF besar pun hanya candle yang dah tutup). Kalau keputusan SETUP / PASANG LIMIT dengan gred cukup,
+  // pasang order limit di entry; tamat tempoh selepas `expiry` candle, batal kalau harga sampai TP dulu.
+  // Keluar di SL atau TP1. SL dikira dulu kalau kedua-dua kena dalam candle sama. Yuran ditolak.
+  async function backtestPlan(c, curSec, htfSecs, o = {}) {
+    const fee = (o.feePct ?? 0.1) / 100, minGrade = o.minGrade || 'B', allowShort = o.allowShort !== false;
+    const WIN = 600, EXP = o.expiry || 12, n = c.length, start = Math.min(n, 260);
+    const gradeOk = (g) => g === 'A' || (minGrade === 'B' && g === 'B');
+    const aggs = htfSecs.map((sec, j) => {
+      const given = o.htfData && o.htfData[j];
+      return { sec, agg: given && given.length >= 60 ? given : aggregate(c, sec), k: -1, info: null };
+    });
+    const trades = [];
+    let pos = null, pend = null, evals = 0, signals = 0, missed = 0, expired = 0;
+    const close = (exit, i, why) => {
+      const gross = (pos.dir === 'long' ? exit - pos.entry : pos.entry - exit) / pos.risk;
+      const cost = fee * (pos.entry + exit) / pos.risk;
+      trades.push({ dir: pos.dir, grade: pos.grade, entryTime: pos.time, exitTime: c[i].time, entry: pos.entry, exit, r: gross - cost, cost, why });
+      pos = null;
+    };
+    for (let i = start; i < n; i++) {
+      const b = c[i];
+      if (pos) {
+        const hitSL = pos.dir === 'long' ? b.low <= pos.sl : b.high >= pos.sl;
+        const hitTP = pos.dir === 'long' ? b.high >= pos.tp : b.low <= pos.tp;
+        if (hitSL) close(pos.sl, i, 'sl'); else if (hitTP) close(pos.tp, i, 'tp');
+      } else if (pend) {
+        const L = pend.dir === 'long';
+        if (L ? b.low <= pend.entry : b.high >= pend.entry) {
+          pos = { ...pend, time: b.time }; pend = null;
+          if (L ? b.low <= pos.sl : b.high >= pos.sl) close(pos.sl, i, 'sl'); // masuk & kena SL dalam candle sama
+        } else if (L ? b.high >= pend.tp : b.low <= pend.tp) { missed++; pend = null; }
+        else if (i - pend.at >= EXP) { expired++; pend = null; }
+      }
+      if (!pos && !pend && i < n - 1) {
+        evals++;
+        const tClose = b.time + curSec;
+        const htf = [];
+        for (const h of aggs) {
+          let k = h.k;
+          while (k + 1 < h.agg.length && h.agg[k + 1].time + h.sec <= tClose) k++;
+          if (k !== h.k) { h.k = k; h.info = k >= 59 ? trendInfo(h.agg.slice(Math.max(0, k - WIN + 1), k + 1)) : null; }
+          htf.push({ tf: String(h.sec), info: h.info });
+        }
+        const p = plan(c.slice(Math.max(0, i - WIN + 1), i + 1), htf, { spotOnly: !allowShort, feePct: fee * 100 });
+        if (p.verdict !== 'TUNGGU' && gradeOk(p.grade)) {
+          signals++;
+          pend = { dir: p.dir, entry: p.entry, sl: p.sl, tp: p.tp1, risk: p.risk, at: i, grade: p.grade };
+        }
+      }
+      if (o.yieldEvery && i % o.yieldEvery === 0) {
+        await new Promise(r => setTimeout(r, 0));
+        if (o.onProgress) o.onProgress((i - start) / Math.max(1, n - start));
+        if (o.cancelled && o.cancelled()) return null;
+      }
+    }
+    return { trades, ...stats(trades), open: pos || pend ? 1 : 0, evals, signals, missed, expired,
+      from: c[start]?.time, to: c[n - 1]?.time, feePct: fee * 100, strat: 'plan', minGrade,
+      buyHoldPct: n > start ? (c[n - 1].close / c[start].close - 1) * 100 : 0 };
+  }
+
+  // ---------- Monte Carlo: susun semula hasil trade secara rawak ribuan kali ----------
+  // Urutan menang/kalah sebenar akan berbeza dari sejarah. Ini tunjuk julat drawdown yang munasabah.
+  function monteCarlo(rs, runs = 2000, seed = 12345) {
+    if (!rs || rs.length < 5) return null;
+    let s = seed;
+    const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    const dds = [], finals = [];
+    let streak95 = [];
+    for (let k = 0; k < runs; k++) {
+      let eq = 0, pk = 0, dd = 0, st = 0, mx = 0;
+      for (let j = 0; j < rs.length; j++) {
+        const r = rs[Math.floor(rnd() * rs.length)];
+        eq += r; pk = Math.max(pk, eq); dd = Math.max(dd, pk - eq);
+        if (r <= 0) { st++; mx = Math.max(mx, st); } else st = 0;
+      }
+      dds.push(dd); finals.push(eq); streak95.push(mx);
+    }
+    const num = (a, b) => a - b;
+    dds.sort(num); finals.sort(num); streak95.sort(num);
+    const q = (arr, p) => arr[Math.min(arr.length - 1, Math.floor(p * arr.length))];
+    return { runs, n: rs.length, dd50: q(dds, 0.5), dd95: q(dds, 0.95), final5: q(finals, 0.05), final50: q(finals, 0.5), final95: q(finals, 0.95),
+      probLoss: finals.filter(x => x < 0).length / runs, streak95: q(streak95, 0.95) };
+  }
+
   // Tafsiran jujur keputusan backtest
   function judge(bt) {
     if (bt.n && bt.avgCost > 0.5) return { level: 'bad', text: `Yuran sahaja makan ${bt.avgCost.toFixed(2)}R setiap trade: SL terlalu rapat berbanding yuran pada timeframe ni. Guna timeframe lebih besar (1h/4h) atau exchange yang yurannya lebih rendah.` };
-    if (bt.n < 30) return { level: 'warn', text: `Cuma ${bt.n} trade. Sampel terlalu kecil untuk dipercayai: tukar ke timeframe lebih besar (1h/4h) untuk lebih banyak sejarah, atau anggap keputusan ni sebagai kebetulan.` };
+    if (bt.n < 30) return { level: 'warn', text: `Cuma ${bt.n} trade. Sampel terlalu kecil untuk dipercayai: anggap sebagai petunjuk awal sahaja (boleh jadi kebetulan). Kumpul sekurang-kurangnya 30 trade, contohnya forward test di akaun demo, sebelum percaya.` };
     if (bt.expectancy <= 0) return { level: 'bad', text: `Purata ${bt.expectancy.toFixed(2)}R setiap trade selepas yuran. Strategi ni RUGI pada data ni. Jangan guna dengan duit sebenar.` };
     if (bt.firstHalfR <= 0 || bt.secondHalfR <= 0) return { level: 'warn', text: 'Untung keseluruhan, tapi cuma pada separuh tempoh. Tak konsisten: kemungkinan nasib atau keadaan pasaran tertentu sahaja.' };
     if (bt.profitFactor < 1.2) return { level: 'warn', text: `Untung tipis (profit factor ${bt.profitFactor.toFixed(2)}). Sedikit perubahan yuran atau slippage boleh jadikan rugi.` };
     return { level: 'good', text: `Ada tanda edge: untung pada kedua-dua separuh tempoh, profit factor ${bt.profitFactor.toFixed(2)}. Langkah seterusnya: forward test di akaun demo sekurang-kurangnya 30 trade sebelum duit sebenar.` };
   }
 
-  TD.ana = { pivots, structure, zones, trendInfo, plan, aggregate, backtest, stats, judge, STRATS };
+  TD.ana = { pivots, structure, zones, divergence, trendInfo, plan, aggregate, backtest, backtestPlan, monteCarlo, stats, judge, STRATS };
 })();
