@@ -26,6 +26,12 @@ Boleh juga deploy sebagai static site (GitHub Pages / Netlify / Vercel) supaya b
 - **Long / Short position**: kotak target/stop yang boleh ditarik, dengan R:R dan saiz lot ikut modal & risk %. Tekan **▶ Pantau setup** untuk terus jadikan setup
 - Magnet (lekat ke OHLC), sorok semua, padam semua, undo (Ctrl+Z), padam terpilih (Del)
 
+**Untuk pengguna Malaysia / phone**
+- Paparan wang dalam **RM** (kadar USD→MYR live, boleh ubah sendiri) atau USD
+- **Mod akaun spot** (cth Luno): sorok Short, amaran bila trend turun
+- Sumber data auto: Binance → OKX → Coinbase (Binance disekat di sesetengah network)
+- Boleh dipasang ke home screen (ikon app, skrin penuh), panduan muncul bila pilih tool
+
 **Setup & pemantauan**
 - Setup builder: entry/SL/TP1/TP2, kalkulator saiz posisi, amaran R:R < 1 dan leverage
 - ⚡ Cadang setup: trend EMA200 + SL 1.5×ATR, TP 1.5R / 3R

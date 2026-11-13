@@ -23,6 +23,18 @@
   const TZ_SHIFT = -new Date().getTimezoneOffset() * 60;
   const CHART_TYPES = { candles: 'Candle', hollow: 'Candle kosong', bars: 'Bar', heikin: 'Heikin Ashi', line: 'Garisan', area: 'Kawasan' };
   const UP = '#089981', DN = '#f23645';
+  const TOOL_TIPS = {
+    trend: 'Trend line: tap titik pertama, kemudian titik kedua',
+    ray: 'Ray: tap titik mula, kemudian arah garisan',
+    hline: 'Garisan mendatar: tap pada paras harga (support/resistance)',
+    vline: 'Garisan menegak: tap pada masa yang dikehendaki',
+    rect: 'Zon: tap satu bucu, kemudian bucu bertentangan',
+    fib: 'Fibonacci: tap swing pertama, kemudian swing kedua',
+    long: 'Long: tap pada paras harga ENTRY (beli)',
+    short: 'Short: tap pada paras harga ENTRY (jual)',
+    measure: 'Ukur: tap titik mula, kemudian titik akhir',
+    text: 'Teks: tap tempat untuk letak nota',
+  };
   const uid = () => Math.random().toString(36).slice(2, 10);
   const mkInd = (type, params, colors) => ({ id: uid(), type, params: { ...Object.fromEntries(I.DEFS[type].params.map(p => [p.k, p.def])), ...params }, colors: colors || [...I.DEFS[type].colors], visible: true });
 
@@ -41,6 +53,10 @@
     // mod demo yang dihidupkan secara auto (sebab gagal sambung) tidak dikekalkan: cuba live semula setiap kali buka
     demo: saved.demoManual ? !!saved.demo : false,
     demoManual: saved.demoManual ?? false,
+    ccy: saved.ccy || 'USD',
+    fx: saved.fx || 4.2,
+    spotOnly: saved.spotOnly ?? false,
+    legendOpen: saved.legendOpen ?? (window.innerWidth > 860),
     source: saved.source || null,
     magnet: saved.magnet ?? false,
     hideDrawings: false,
@@ -60,7 +76,7 @@
 
   const persist = () => store.save({
     symbol: S.symbol, interval: S.interval, chartType: S.chartType, watch: S.watch, indicators: S.indicators, drawings: S.drawings,
-    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source,
+    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen,
     magnet: S.magnet, priceMode: S.priceMode, sideTab: S.sideTab, sideCollapsed: S.sideCollapsed,
     setups: S.setups, alerts: S.alerts, log: S.log.slice(0, 100),
   });
@@ -68,7 +84,14 @@
   // ---------- helpers ----------
   const decimalsFor = (p) => p >= 1000 ? 2 : p >= 10 ? 3 : p >= 1 ? 4 : p >= 0.01 ? 5 : p >= 0.0001 ? 7 : 8;
   const fmt = (v, d = S.precision) => (v == null || !isFinite(v)) ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
-  const fmtUsd = (v) => (v == null || !isFinite(v)) ? '—' : (v < 0 ? '-$' : '$') + Math.abs(v).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  // nilai wang disimpan dalam USD; dipaparkan dalam USD atau RM ikut tetapan
+  const ccyFactor = () => S.ccy === 'MYR' ? S.fx : 1;
+  const ccySym = () => S.ccy === 'MYR' ? 'RM' : '$';
+  const fmtUsd = (v) => {
+    if (v == null || !isFinite(v)) return '—';
+    const x = v * ccyFactor();
+    return (x < 0 ? '-' : '') + ccySym() + Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
   const fmtR = (r) => (r == null || !isFinite(r)) ? '—' : (r >= 0 ? '+' : '') + r.toFixed(2) + 'R';
   const fmtBig = (v) => v >= 1e9 ? (v / 1e9).toFixed(2) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(1) + 'K' : v.toFixed(2);
   const fmtInd = (v) => v == null || !isFinite(v) ? '—' : Math.abs(v) >= 1e5 ? fmtBig(v) : fmt(v, Math.abs(v) < 1 ? 4 : Math.min(S.precision, 2) + (Math.abs(v) < 100 ? 0 : 0));
@@ -109,11 +132,18 @@
     getSec: () => INTERVAL_SEC[S.interval],
     fmt: (p) => fmt(p),
     getRisk: () => ({ balance: S.balance, riskPct: S.riskPct }),
+    money: (v) => fmtUsd(v),
     getAtr: () => { const a = I.atr(S.candles, 14); return a[a.length - 1]; },
     defaultColor: (t) => ({ hline: '#f5b301', rect: '#9c27b0', text: '#2962ff' }[t] || '#2962ff'),
     onChange: (list) => { S.drawings[S.symbol] = list; persist(); },
     onSelect: (d) => renderSelBar(d),
-    onTool: (t) => $$('#drawbar [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t)),
+    onTool: (t) => {
+      $$('#drawbar [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
+      if (S.pick) return; // banner sedang dipakai oleh pilihan harga setup
+      const tip = TOOL_TIPS[t];
+      $('#pickBanner').textContent = tip ? tip + ' · Esc/✕ batal' : '';
+      $('#pickBanner').classList.toggle('hidden', !tip);
+    },
     countdown: () => {
       const n = S.candles.length; if (!n || !mainSeries) return null;
       const c = S.candles[n - 1], sec = INTERVAL_SEC[S.interval];
@@ -272,8 +302,10 @@
   }
   function buildLegend() {
     $('#legend').innerHTML =
-      `<div class="main"><span class="title">${esc(S.symbol)} · ${S.interval} · ${sourceLabel()}</span><span class="ohlc" id="lgOhlc"></span></div>` +
-      indRT.filter(r => r.def.overlay).map(indRow).join('');
+      `<div class="main"><span class="title">${esc(S.symbol)} · ${S.interval} · ${sourceLabel()}</span>` +
+      `<button class="lg-toggle" id="lgToggle" title="Tunjuk/sorok indikator">${S.legendOpen ? '▴' : '▾'}</button>` +
+      `<span class="ohlc" id="lgOhlc"></span></div>` +
+      `<div class="lg-inds ${S.legendOpen ? '' : 'hidden'}">${indRT.filter(r => r.def.overlay).map(indRow).join('')}</div>`;
     $('#paneLegends').innerHTML = indRT.filter(r => !r.def.overlay).map(r => `<div class="pane-legend" data-pane="${r.pane}">${indRow(r)}</div>`).join('');
     requestAnimationFrame(() => requestAnimationFrame(positionPaneLegends));
   }
@@ -295,7 +327,7 @@
     const col = c.close >= c.open ? 'pos' : 'neg';
     const ch = prev ? c.close - prev.close : 0, chp = prev ? ch / prev.close * 100 : 0;
     const el = $('#lgOhlc');
-    if (el) el.innerHTML = `O<b class="${col}">${fmt(c.open)}</b> H<b class="${col}">${fmt(c.high)}</b> L<b class="${col}">${fmt(c.low)}</b> C<b class="${col}">${fmt(c.close)}</b> <b class="${ch >= 0 ? 'pos' : 'neg'}">${ch >= 0 ? '+' : ''}${fmt(ch)} (${chp >= 0 ? '+' : ''}${chp.toFixed(2)}%)</b>`;
+    if (el) el.innerHTML = `<span class="hl">O<b class="${col}">${fmt(c.open)}</b> H<b class="${col}">${fmt(c.high)}</b> L<b class="${col}">${fmt(c.low)}</b> </span>C<b class="${col}">${fmt(c.close)}</b> <b class="${ch >= 0 ? 'pos' : 'neg'}">${ch >= 0 ? '+' : ''}${fmt(ch)} (${chp >= 0 ? '+' : ''}${chp.toFixed(2)}%)</b>`;
     for (const r of indRT) {
       const v = $(`[data-v="${r.inst.id}"]`); if (!v || !r.outs) continue;
       v.innerHTML = r.outs.map(o => `<span style="color:${(o.colors ? o.colors[i] : o.color).slice(0, 7)}">${r.def.volume ? fmtBig(o.data[i] || 0) : fmtInd(o.data[i])}</span>`).join(' ');
@@ -306,6 +338,7 @@
     scheduleLegend();
   });
   function onLegendClick(e) {
+    if (e.target.closest('#lgToggle')) { S.legendOpen = !S.legendOpen; persist(); buildLegend(); updateLegend(); return; }
     const btn = e.target.closest('button[data-a]'); if (!btn) return;
     const id = btn.closest('[data-ind]').dataset.ind;
     const inst = S.indicators.find(x => x.id === id); if (!inst) return;
@@ -327,7 +360,7 @@
     const pos = d.type === 'long' || d.type === 'short';
     let html = '';
     if (!pos && d.type !== 'measure') html += SWATCH.map(c => `<span class="sw ${d.color === c ? 'on' : ''}" data-c="${c}" style="background:${c}"></span>`).join('');
-    if (pos) html += `<button class="b go" data-b="track">▶ Pantau setup</button><button class="b" data-b="flip" title="Tukar long/short">⇅</button>`;
+    if (pos) html += `<button class="b go" data-b="track">▶ Pantau setup</button>${S.spotOnly ? '' : '<button class="b" data-b="flip" title="Tukar long/short">⇅</button>'}`;
     if (d.type === 'text') html += `<button class="b" data-b="edit">✎</button>`;
     html += `<button class="b" data-b="del" title="Padam (Del)"><svg><use href="#i-trash"/></svg></button>`;
     el.innerHTML = html;
@@ -391,13 +424,15 @@
     setPick(null); drawLines(); renderCalc();
   });
   function setPick(k) {
+    if (k) drawings.setTool('cursor');
     S.pick = k;
     $$('.pick[data-pick]').forEach(b => b.classList.toggle('active', b.dataset.pick === k));
     const names = { entry: 'Entry', sl: 'Stop Loss', tp1: 'TP1', tp2: 'TP2', alert: 'Alert' };
-    $('#pickBanner').textContent = k ? `Klik pada chart untuk set ${names[k]} (Esc batal)` : '';
+    $('#pickBanner').textContent = k ? `Tap pada chart untuk set ${names[k]} · Esc/✕ batal` : '';
     $('#pickBanner').classList.toggle('hidden', !k);
-    if (k) drawings.setTool('cursor');
   }
+  // tekan banner = batal tool / pilihan harga (berguna di phone yang tiada kekunci Esc)
+  $('#pickBanner').addEventListener('click', () => { setPick(null); drawings.cancel(); });
 
   // ---------- data feed ----------
   let feed = null, klineClose = null, tickClose = null, demoTimer = null, feedGen = 0;
@@ -500,8 +535,11 @@
     renderMarkers();
     if (!S.autoSignal) return;
     for (const s of signalAt(signalsFor(S.candles), i)) {
-      notify(`Signal ${s.side === 'long' ? 'BUY' : 'SELL'} · ${S.symbol} ${S.interval}`, `${s.text} @ ${fmt(c.close)}`, s.side === 'long' ? 'good' : 'bad',
-        { label: 'Buat setup', fn: () => suggestSetup(s.side) });
+      const spotSell = s.side === 'short' && S.spotOnly;
+      notify(`Signal ${s.side === 'long' ? 'BUY' : 'SELL'} · ${S.symbol} ${S.interval}`,
+        `${s.text} @ ${fmt(c.close)}${spotSell ? ' — akaun spot: jangan beli dulu, atau pertimbang ambil untung' : ''}`,
+        s.side === 'long' ? 'good' : 'bad',
+        spotSell ? null : { label: 'Buat setup', fn: () => suggestSetup(s.side) });
     }
   }
 
@@ -726,6 +764,10 @@
     const n = S.candles.length; if (n < 30) return;
     const c = S.candles[n - 1], sig = signalsFor(S.candles), i = n - 1;
     if (!side) side = sig.e200[i] != null ? (c.close >= sig.e200[i] ? 'long' : 'short') : (sig.e20[i] >= sig.e50[i] ? 'long' : 'short');
+    if (side === 'short' && S.spotOnly) {
+      toast('Trend sedang turun', 'Akaun spot tak boleh short. Lebih selamat tunggu harga naik balik atas EMA50/EMA200 sebelum beli.', 'bad');
+      return;
+    }
     const at = I.atr(S.candles, 14), a = at[at.length - 1];
     const entry = c.close, L = side === 'long';
     const sl = L ? entry - 1.5 * a : entry + 1.5 * a, risk = Math.abs(entry - sl);
@@ -1094,9 +1136,42 @@
   $('#btnClearJournal').onclick = () => { if (confirm('Padam semua rekod jurnal?')) { S.setups = S.setups.filter(isOpen); persist(); renderJournal(); } };
 
   // tetapan
-  $('#sBalance').value = S.balance; $('#sRisk').value = S.riskPct;
+  // ---- mata wang paparan (RM / USD) ----
+  function renderCcy() {
+    $('#sCcy').value = S.ccy;
+    $('#sFx').value = S.fx;
+    $('#fxRow').classList.toggle('hidden', S.ccy !== 'MYR');
+    $('#lblBalance').textContent = `Modal (${S.ccy === 'MYR' ? 'RM' : 'USD'})`;
+    $('#sBalance').value = +(S.balance * ccyFactor()).toFixed(2);
+  }
+  function refreshMoney() { renderCalc(); renderOpen(); renderJournal(); drawings.redraw(); }
+  async function updateFx() {
+    // kadar USD→MYR live (Coinbase). Kalau gagal, guna kadar tersimpan / yang ditaip sendiri.
+    try {
+      const ctl = new AbortController(); const t = setTimeout(() => ctl.abort(), 6000);
+      const j = await (await fetch('https://api.coinbase.com/v2/exchange-rates?currency=USD', { signal: ctl.signal })).json();
+      clearTimeout(t);
+      const r = +j?.data?.rates?.MYR;
+      if (r > 1 && r < 20) { S.fx = +r.toFixed(4); persist(); renderCcy(); refreshMoney(); $('#fxNote').textContent = 'Kadar live dikemas kini ' + new Date().toLocaleTimeString('ms-MY', { hour: '2-digit', minute: '2-digit' }); }
+    } catch { $('#fxNote').textContent = 'Tak dapat kadar live — guna kadar di atas (boleh ubah sendiri).'; }
+  }
+  $('#sCcy').onchange = e => { S.ccy = e.target.value; persist(); renderCcy(); refreshMoney(); if (S.ccy === 'MYR') updateFx(); };
+  $('#sFx').oninput = e => { const v = num(e.target.value); if (v > 1 && v < 20) { S.fx = v; persist(); $('#sBalance').value = +(S.balance * ccyFactor()).toFixed(2); refreshMoney(); } };
+
+  // ---- mod akaun spot (beli sahaja) ----
+  function applySpot() {
+    $('#sSpot').checked = S.spotOnly;
+    $$('[data-tool="short"]').forEach(b => b.classList.toggle('hidden', S.spotOnly));
+    $('#dirSeg [data-dir="short"]').classList.toggle('hidden', S.spotOnly);
+    if (S.spotOnly && S.draft.dir === 'short') { S.draft.dir = 'long'; syncDraftInputs(); renderCalc(); }
+  }
+  $('#sSpot').onchange = e => { S.spotOnly = e.target.checked; persist(); applySpot(); };
+
+  renderCcy(); applySpot();
+  if (S.ccy === 'MYR') updateFx();
+  $('#sRisk').value = S.riskPct;
   $('#sSound').checked = S.sound; $('#sAutoSignal').checked = S.autoSignal; $('#sDemo').checked = S.demo;
-  $('#sBalance').oninput = e => { const v = num(e.target.value); if (v > 0) { S.balance = v; persist(); renderCalc(); drawings.redraw(); } };
+  $('#sBalance').oninput = e => { const v = num(e.target.value); if (v > 0) { S.balance = v / ccyFactor(); persist(); renderCalc(); drawings.redraw(); } };
   $('#sRisk').oninput = e => { const v = num(e.target.value); if (v > 0 && v <= 100) { S.riskPct = v; persist(); renderCalc(); drawings.redraw(); } };
   $('#sSound').onchange = e => { S.sound = e.target.checked; persist(); if (S.sound) beep('info'); };
   $('#sAutoSignal').onchange = e => { S.autoSignal = e.target.checked; persist(); };

@@ -96,7 +96,9 @@ TD.createDrawings = function (ctx) {
   const all = () => creating ? [...items, creating] : items;
 
   // ---------- render ----------
+  let paneW = 0;
   function render(g, size) {
+    paneW = size.width;
     if (hidden || !series) return;
     g.save();
     g.lineCap = 'round';
@@ -119,6 +121,8 @@ TD.createDrawings = function (ctx) {
     const lines = String(text).split('\n');
     const w = Math.max(...lines.map(l => g.measureText(l).width)) + 12, h = lines.length * 15 + 6;
     let x0 = align === 'center' ? x - w / 2 : align === 'right' ? x - w : x;
+    // pastikan label kekal dalam kawasan chart (penting di skrin phone yang sempit)
+    if (paneW) x0 = Math.max(4, Math.min(paneW - w - 4, x0));
     const y0 = y - h / 2;
     g.fillStyle = bg; roundRect(g, x0, y0, w, h, 4); g.fill();
     g.fillStyle = fg; g.textBaseline = 'middle'; g.textAlign = 'left';
@@ -233,8 +237,8 @@ TD.createDrawings = function (ctx) {
     const yTl = up ? Math.min(yT, yE - 20) - 12 : Math.max(yT, yE + 20) + 12;
     const ySl = up ? Math.max(yS, yE + 20) + 12 : Math.min(yS, yE - 20) - 12;
     if (sel || w > 140) {
-      label(g, `Target: ${ctx.fmt(d.tp)} (${pct(d.tp)})  +$${(rr * riskUsd).toFixed(2)}`, mx, yTl, '#089981');
-      label(g, `Stop: ${ctx.fmt(d.sl)} (${pct(d.sl)})  -$${riskUsd.toFixed(2)}`, mx, ySl, '#f23645');
+      label(g, `Target: ${ctx.fmt(d.tp)} (${pct(d.tp)})  +${ctx.money(rr * riskUsd)}`, mx, yTl, '#089981');
+      label(g, `Stop: ${ctx.fmt(d.sl)} (${pct(d.sl)})  -${ctx.money(riskUsd)}`, mx, ySl, '#f23645');
     }
     label(g, `${up ? 'Long' : 'Short'} · R:R ${rr.toFixed(2)} · Qty ${qty < 1 ? qty.toFixed(5) : qty.toFixed(2)}`, mx, yE, 'rgba(30,34,45,0.92)');
     if (sel) {
