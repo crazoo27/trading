@@ -406,7 +406,10 @@
     let lastErr;
     for (const base of REST_BASES) {
       try {
-        const r = await fetch(base + path);
+        // had masa 8 saat: kalau network sekat (bukan tolak), fetch boleh tergantung lama tanpa error
+        const ctl = new AbortController();
+        const timer = setTimeout(() => ctl.abort(), 8000);
+        const r = await fetch(base + path, { signal: ctl.signal }).finally(() => clearTimeout(timer));
         if (r.ok) return await r.json();
         lastErr = new Error('HTTP ' + r.status);
         if (r.status === 400) break;
@@ -423,6 +426,7 @@
     drawings.load(S.drawings[S.symbol]);
     buildLegend();
     if (S.demo) { startDemo(gen); return; }
+    $('#lgOhlc') && ($('#lgOhlc').textContent = 'Menyambung ke Binance…');
     try {
       const raw = await fetchJson(`/api/v3/klines?symbol=${S.symbol}&interval=${S.interval}&limit=1000`);
       if (gen !== feedGen) return;
