@@ -23,19 +23,25 @@ window.TD = window.TD || {};
   }
 
   // WebSocket dengan had masa sambungan + ping. Pulangkan fungsi untuk tutup.
-  function socket(url, { onOpen, onMessage, onClose, ping }) {
-    let closedByUs = false, pingT = null;
+  // stallMs: kalau tiada sebarang mesej selama tempoh ni, anggap sambungan dah mati dan tutup (app akan sambung semula).
+  // Phone yang dikunci selalunya tinggalkan soket "terbuka" tapi senyap — tanpa ni chart boleh beku tanpa disedari.
+  function socket(url, { onOpen, onMessage, onClose, ping, stallMs }) {
+    let closedByUs = false, pingT = null, stallT = null, lastMsg = Date.now(), done = false;
     const s = new WebSocket(url);
-    const connectT = setTimeout(() => { if (s.readyState !== 1) try { s.close(); } catch {} }, 10000);
+    const cleanup = () => { clearTimeout(connectT); clearInterval(pingT); clearInterval(stallT); };
+    const fail = () => { if (done) return; done = true; cleanup(); try { s.close(); } catch {} if (!closedByUs) onClose && onClose(); };
+    const connectT = setTimeout(() => { if (s.readyState !== 1) fail(); }, 10000);
     s.onopen = () => {
       clearTimeout(connectT);
+      lastMsg = Date.now();
       onOpen && onOpen(s);
       if (ping) pingT = setInterval(() => { try { s.send(ping); } catch {} }, 20000);
+      if (stallMs) stallT = setInterval(() => { if (Date.now() - lastMsg > stallMs) fail(); }, 5000);
     };
-    s.onmessage = (ev) => { try { onMessage(ev.data, s); } catch { /* mesej rosak diabaikan */ } };
-    s.onclose = () => { clearTimeout(connectT); clearInterval(pingT); if (!closedByUs) onClose && onClose(); };
-    s.onerror = () => { try { s.close(); } catch {} };
-    return () => { closedByUs = true; clearTimeout(connectT); clearInterval(pingT); try { s.close(); } catch {} };
+    s.onmessage = (ev) => { lastMsg = Date.now(); try { onMessage(ev.data, s); } catch { /* mesej rosak diabaikan */ } };
+    s.onclose = fail;
+    s.onerror = fail;
+    return () => { closedByUs = true; done = true; cleanup(); try { s.close(); } catch {} };
   }
 
   // minggu bermula Isnin (00:00 UTC), sama macam Binance/OKX
@@ -95,27 +101,24 @@ window.TD = window.TD || {};
       if (j.code !== '0') { if (j.code === '51001') throw notFound(); throw new Error(`OKX ${j.code} ${j.msg}`); }
       return j.data;
     },
+    // 4 halaman (300 candle setiap satu) diminta SERENTAK: masa muat = satu permintaan, bukan empat berturut-turut.
+    // Sempadan halaman dikira dari masa sekarang, bertindih 3 candle supaya tiada lompang; pendua dibuang.
     async history(sym, iv) {
-      const inst = okxInst(sym), bar = OKX_BAR[iv];
-      let rows = [], after = '';
-      for (let p = 0; p < 4; p++) {
-        let d;
-        try { d = await this.get(`/api/v5/market/candles?instId=${inst}&bar=${bar}&limit=300${after ? `&after=${after}` : ''}`); }
-        catch (e) { if (p === 0) throw e; break; }
-        if (!d.length) break;
-        rows = rows.concat(d);
-        after = d[d.length - 1][0];
-        if (d.length < 300) break;
-      }
-      if (!rows.length) throw notFound();
-      return rows.map(okxRow).reverse();
+      const inst = okxInst(sym), bar = OKX_BAR[iv], sec = SEC[iv];
+      const T = bucketOf(Math.floor(Date.now() / 1000), sec);
+      const url = (k) => `/api/v5/market/candles?instId=${inst}&bar=${bar}&limit=300` + (k ? `&after=${(T - (300 * k - 3) * sec) * 1000}` : '');
+      const pages = await Promise.all([0, 1, 2, 3].map(k => this.get(url(k)).catch(e => { if (k === 0) throw e; return []; })));
+      const byTime = new Map();
+      for (const d of pages) for (const r of d) byTime.set(r[0], r);
+      if (!byTime.size) throw notFound();
+      return [...byTime.values()].map(okxRow).sort((a, b) => a.time - b.time);
     },
     async symbols() {
       return (await this.get('/api/v5/market/tickers?instType=SPOT')).map(x => ({ s: okxSym(x.instId), p: +x.last })).filter(x => x.p > 0);
     },
     openKline(sym, iv, h) {
       return socket('wss://ws.okx.com:8443/ws/v5/business', {
-        ping: 'ping', onClose: h.onClose,
+        ping: 'ping', stallMs: 45000, onClose: h.onClose,
         onOpen: (s) => { s.send(JSON.stringify({ op: 'subscribe', args: [{ channel: 'candle' + OKX_BAR[iv], instId: okxInst(sym) }] })); h.onOpen && h.onOpen(); },
         onMessage: (d) => {
           if (d === 'pong') return;
@@ -126,7 +129,7 @@ window.TD = window.TD || {};
     },
     openTickers(syms, h) {
       return socket('wss://ws.okx.com:8443/ws/v5/public', {
-        ping: 'ping', onClose: h.onClose,
+        ping: 'ping', stallMs: 45000, onClose: h.onClose,
         onOpen: (s) => s.send(JSON.stringify({ op: 'subscribe', args: syms.map(x => ({ channel: 'tickers', instId: okxInst(x) })) })),
         onMessage: (d) => {
           if (d === 'pong') return;
@@ -166,21 +169,18 @@ window.TD = window.TD || {};
       const sec = SEC[iv], g = CB_G.find(x => x <= sec && sec % x === 0);
       const prod = cbProd(sym);
       const pages = Math.min(4, Math.max(1, Math.ceil(600 * sec / g / 300)));
-      let end = Math.floor(Date.now() / 1000), rows = [];
-      for (let p = 0; p < pages; p++) {
-        const start = end - 300 * g;
-        let d;
-        try {
-          d = await getJson(`${this.base}/products/${prod}/candles?granularity=${g}&start=${new Date(start * 1000).toISOString()}&end=${new Date(end * 1000).toISOString()}`);
-        } catch (e) {
-          if (e.status === 404 || e.status === 400) throw notFound();
-          if (p === 0) throw e;
-          break;
-        }
-        if (!d.length) break;
-        rows = rows.concat(d);
-        end = start;
-      }
+      const now = Math.floor(Date.now() / 1000);
+      // semua halaman diminta serentak (julat masa setiap halaman memang dah diketahui)
+      const got = await Promise.all(Array.from({ length: pages }, (_, p) => {
+        const end = now - p * 300 * g, start = end - 300 * g;
+        return getJson(`${this.base}/products/${prod}/candles?granularity=${g}&start=${new Date(start * 1000).toISOString()}&end=${new Date(end * 1000).toISOString()}`)
+          .catch(e => {
+            if (e.status === 404 || e.status === 400) throw notFound();
+            if (p === 0) throw e;
+            return [];
+          });
+      }));
+      let rows = [].concat(...got);
       if (!rows.length) throw notFound();
       rows = rows.map(r => ({ time: r[0], low: r[1], high: r[2], open: r[3], close: r[4], volume: r[5] })).sort((a, b) => a.time - b.time);
       rows = rows.filter((r, i) => i === 0 || r.time !== rows[i - 1].time);
@@ -194,8 +194,9 @@ window.TD = window.TD || {};
       const sec = SEC[iv];
       let cur = null;
       return socket('wss://ws-feed.exchange.coinbase.com', {
-        onClose: h.onClose,
-        onOpen: (s) => { s.send(JSON.stringify({ type: 'subscribe', product_ids: [cbProd(sym)], channels: ['ticker'] })); h.onOpen && h.onOpen(); },
+        onClose: h.onClose, stallMs: 30000,
+        // 'heartbeat' hantar satu mesej sesaat, jadi pair yang sunyi pun tak disalah anggap sebagai sambungan mati
+        onOpen: (s) => { s.send(JSON.stringify({ type: 'subscribe', product_ids: [cbProd(sym)], channels: ['ticker', 'heartbeat'] })); h.onOpen && h.onOpen(); },
         onMessage: (d) => {
           const m = JSON.parse(d); if (m.type !== 'ticker') return;
           const px = +m.price, t = Math.floor(new Date(m.time).getTime() / 1000), b = bucketOf(t, sec);
@@ -218,8 +219,8 @@ window.TD = window.TD || {};
         const ids = [...new Set(syms.map(cbProd))].filter(id => ok.has(id));
         if (!ids.length) return;
         close = socket('wss://ws-feed.exchange.coinbase.com', {
-          onClose: h.onClose,
-          onOpen: (s) => s.send(JSON.stringify({ type: 'subscribe', product_ids: ids, channels: ['ticker'] })),
+          onClose: h.onClose, stallMs: 30000,
+          onOpen: (s) => s.send(JSON.stringify({ type: 'subscribe', product_ids: ids, channels: ['ticker', 'heartbeat'] })),
           onMessage: (d) => {
             const m = JSON.parse(d); if (m.type !== 'ticker') return;
             const price = +m.price;

@@ -12,7 +12,20 @@
   <link rel="apple-touch-icon" href="icons/icon-180.png">
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <title>TradeDesk</title>
-  <link rel="stylesheet" href="css/style.css?v=5">
+  <link rel="preconnect" href="https://www.okx.com" crossorigin>
+  <link rel="stylesheet" href="css/style.css?v=6">
+  <!-- Mula minta data candle SEKARANG, sementara skrip chart yang besar masih dimuat turun dan diproses. -->
+  <script src="js/feeds.js?v=6"></script>
+  <script>
+    try {
+      var st = JSON.parse(localStorage.getItem('tradedesk.v2') || '{}');
+      if (!(st.demoManual && st.demo)) {
+        var sy = st.symbol || 'BTCUSDT', iv = st.interval || '15m';
+        var early = TD.early = { key: sy + '|' + iv, settled: false, promise: TD.feeds.history(sy, iv, st.source) };
+        early.promise.then(function () { early.settled = true; }, function () {});
+      }
+    } catch (e) {}
+  </script>
 </head>
 <body>
   <svg width="0" height="0" style="position:absolute">
@@ -213,10 +226,9 @@
 
   <div id="toasts" class="toasts"></div>
 
-  <script src="lib/lightweight-charts.standalone.production.js"></script>
-  <script src="js/indicators.js?v=5"></script>
-  <script src="js/feeds.js?v=5"></script>
-  <script src="js/drawings.js?v=5"></script>
-  <script src="js/app.js?v=5"></script>
+  <script src="lib/lightweight-charts.standalone.production.js?v=5.3.0"></script>
+  <script src="js/indicators.js?v=6"></script>
+  <script src="js/drawings.js?v=6"></script>
+  <script src="js/app.js?v=6"></script>
 </body>
 </html>

@@ -1,120 +1,71 @@
-/* Pengiraan indikator + daftar indikator yang boleh ditambah pada chart. */
+/* Pengiraan indikator + daftar indikator yang boleh ditambah pada chart.
+ *
+ * Setiap indikator ditulis sebagai "stepper": init() beri state kosong, step(state, candle)
+ * proses SATU candle dan pulangkan nilainya. Dengan cara ni app boleh simpan state selepas
+ * candle kedua terakhir, dan pada setiap tick harga cuma ulang satu langkah untuk candle
+ * terakhir — bukan kira semula semua candle. */
 window.TD = window.TD || {};
 (() => {
   'use strict';
 
-  const nulls = (n) => new Array(n).fill(null);
+  // ---------- blok asas (state = objek biasa supaya boleh diklon) ----------
+  const maInit = () => ({ n: 0, sum: 0, v: null });
+  // purata bergerak eksponen; k = 2/(p+1) untuk EMA, 1/p untuk RMA (Wilder). Benih = SMA p nilai pertama.
+  function expStep(s, x, p, k) {
+    s.n++;
+    if (s.n < p) { s.sum += x; return null; }
+    if (s.n === p) { s.sum += x; s.v = s.sum / p; return s.v; }
+    s.v = x * k + s.v * (1 - k);
+    return s.v;
+  }
+  const emaStep = (s, x, p) => expStep(s, x, p, 2 / (p + 1));
+  const rmaStep = (s, x, p) => expStep(s, x, p, 1 / p);
 
-  // jalankan fn pada bahagian array yang bukan null, kemudian letak balik pada index asal
-  function onValid(arr, fn) {
-    const start = arr.findIndex(v => v != null);
-    const out = nulls(arr.length);
-    if (start < 0) return out;
-    const res = fn(arr.slice(start));
-    for (let i = 0; i < res.length; i++) out[start + i] = res[i];
-    return out;
+  const smaInit = () => ({ buf: [], sum: 0 });
+  function smaStep(s, x, p) {
+    s.buf.push(x); s.sum += x;
+    if (s.buf.length > p) s.sum -= s.buf.shift();
+    return s.buf.length === p ? s.sum / p : null;
   }
 
-  function sma(v, p) {
-    const out = nulls(v.length); let sum = 0;
-    for (let i = 0; i < v.length; i++) {
-      sum += v[i]; if (i >= p) sum -= v[i - p];
-      if (i >= p - 1) out[i] = sum / p;
+  const rsiInit = () => ({ n: 0, prev: null, g: 0, l: 0 });
+  function rsiStep(s, x, p) {
+    if (s.prev == null) { s.prev = x; return null; }
+    const d = x - s.prev; s.prev = x; s.n++;
+    if (s.n <= p) {
+      if (d > 0) s.g += d; else s.l -= d;
+      if (s.n < p) return null;
+      s.g /= p; s.l /= p;
+    } else {
+      s.g = (s.g * (p - 1) + Math.max(d, 0)) / p;
+      s.l = (s.l * (p - 1) + Math.max(-d, 0)) / p;
     }
-    return out;
+    return s.l === 0 ? 100 : 100 - 100 / (1 + s.g / s.l);
   }
-  function ema(v, p) {
-    const out = nulls(v.length);
-    if (v.length < p) return out;
-    let prev = 0; for (let i = 0; i < p; i++) prev += v[i];
-    prev /= p; out[p - 1] = prev;
-    const k = 2 / (p + 1);
-    for (let i = p; i < v.length; i++) { prev = v[i] * k + prev * (1 - k); out[i] = prev; }
-    return out;
-  }
-  function rma(v, p) {
-    const out = nulls(v.length);
-    if (v.length < p) return out;
-    let prev = 0; for (let i = 0; i < p; i++) prev += v[i];
-    prev /= p; out[p - 1] = prev;
-    for (let i = p; i < v.length; i++) { prev = (prev * (p - 1) + v[i]) / p; out[i] = prev; }
-    return out;
-  }
-  function stdev(v, p) {
-    const out = nulls(v.length);
-    for (let i = p - 1; i < v.length; i++) {
-      let m = 0; for (let j = i - p + 1; j <= i; j++) m += v[j]; m /= p;
-      let s = 0; for (let j = i - p + 1; j <= i; j++) s += (v[j] - m) ** 2;
-      out[i] = Math.sqrt(s / p);
-    }
-    return out;
-  }
-  function rsi(v, p = 14) {
-    const out = nulls(v.length);
-    if (v.length <= p) return out;
-    let g = 0, l = 0;
-    for (let i = 1; i <= p; i++) { const d = v[i] - v[i - 1]; d > 0 ? g += d : l -= d; }
-    g /= p; l /= p;
-    out[p] = l === 0 ? 100 : 100 - 100 / (1 + g / l);
-    for (let i = p + 1; i < v.length; i++) {
-      const d = v[i] - v[i - 1];
-      g = (g * (p - 1) + Math.max(d, 0)) / p;
-      l = (l * (p - 1) + Math.max(-d, 0)) / p;
-      out[i] = l === 0 ? 100 : 100 - 100 / (1 + g / l);
-    }
-    return out;
-  }
-  function trueRanges(c) {
-    return c.map((x, i) => i === 0 ? x.high - x.low : Math.max(x.high - x.low, Math.abs(x.high - c[i - 1].close), Math.abs(x.low - c[i - 1].close)));
-  }
-  const atr = (c, p = 14) => rma(trueRanges(c), p);
 
-  function macd(v, fast, slow, sig) {
-    const f = ema(v, fast), s = ema(v, slow);
-    const m = v.map((_, i) => f[i] != null && s[i] != null ? f[i] - s[i] : null);
-    const signal = onValid(m, a => ema(a, sig));
-    const hist = m.map((x, i) => x != null && signal[i] != null ? x - signal[i] : null);
-    return { m, signal, hist };
+  const atrInit = () => ({ pc: null, ma: maInit() });
+  function atrStep(s, c, p) {
+    const tr = s.pc == null ? c.high - c.low : Math.max(c.high - c.low, Math.abs(c.high - s.pc), Math.abs(c.low - s.pc));
+    s.pc = c.close;
+    return rmaStep(s.ma, tr, p);
   }
-  function stoch(c, kp, dp, smooth) {
-    const raw = nulls(c.length);
-    for (let i = kp - 1; i < c.length; i++) {
-      let hh = -Infinity, ll = Infinity;
-      for (let j = i - kp + 1; j <= i; j++) { hh = Math.max(hh, c[j].high); ll = Math.min(ll, c[j].low); }
-      raw[i] = hh === ll ? 50 : (c[i].close - ll) / (hh - ll) * 100;
-    }
-    const k = onValid(raw, a => sma(a, smooth));
-    const d = onValid(k, a => sma(a, dp));
-    return { k, d };
+
+  // klon state (nombor, array nombor, objek bersarang)
+  function cloneState(s) {
+    if (Array.isArray(s)) return s.slice();
+    const o = {};
+    for (const k in s) { const v = s[k]; o[k] = v !== null && typeof v === 'object' ? cloneState(v) : v; }
+    return o;
   }
-  function vwap(c) {
-    const out = nulls(c.length); let pv = 0, vv = 0, day = null;
-    for (let i = 0; i < c.length; i++) {
-      const d = Math.floor(c[i].time / 86400);
-      if (d !== day) { day = d; pv = 0; vv = 0; }
-      const tp = (c[i].high + c[i].low + c[i].close) / 3;
-      pv += tp * c[i].volume; vv += c[i].volume;
-      out[i] = vv ? pv / vv : tp;
-    }
-    return out;
-  }
-  function supertrend(c, p, mult) {
-    const a = atr(c, p);
-    const line = nulls(c.length), up = nulls(c.length);
-    let fu = null, fl = null, trendUp = true;
-    for (let i = 0; i < c.length; i++) {
-      if (a[i] == null) continue;
-      const hl2 = (c[i].high + c[i].low) / 2;
-      const bu = hl2 + mult * a[i], bl = hl2 - mult * a[i];
-      const pc = i > 0 ? c[i - 1].close : c[i].close;
-      fu = fu == null || bu < fu || pc > fu ? bu : fu;
-      fl = fl == null || bl > fl || pc < fl ? bl : fl;
-      if (trendUp && c[i].close < fl) trendUp = false;
-      else if (!trendUp && c[i].close > fu) trendUp = true;
-      line[i] = trendUp ? fl : fu; up[i] = trendUp;
-    }
-    return { line, up };
-  }
+
+  // ---------- versi array (untuk signal engine, ATR, dll.) ----------
+  const run = (vals, init, step) => { const s = init(); return vals.map(v => step(s, v)); };
+  const sma = (v, p) => run(v, smaInit, (s, x) => smaStep(s, x, p));
+  const ema = (v, p) => run(v, maInit, (s, x) => emaStep(s, x, p));
+  const rma = (v, p) => run(v, maInit, (s, x) => rmaStep(s, x, p));
+  const rsi = (v, p = 14) => run(v, rsiInit, (s, x) => rsiStep(s, x, p));
+  const atr = (c, p = 14) => run(c, atrInit, (s, x) => atrStep(s, x, p));
+
   function heikinAshi(c) {
     const out = [];
     for (let i = 0; i < c.length; i++) {
@@ -126,84 +77,127 @@ window.TD = window.TD || {};
     return out;
   }
 
-  const closes = (c) => c.map(x => x.close);
-
   /* Daftar indikator.
-   * outs(c, p, colors) -> [{ data:[], kind:'line'|'hist', color, colors?:[] (warna per titik), name }]
+   * series(col)            -> [{ kind:'line'|'hist', color, width?, name?, colored? }]  (satu per garisan)
+   * init(p)                -> state
+   * step(s, c, p, col, o, co) -> tulis nilai setiap garisan ke o[k] (null = tiada), warna per titik ke co[k]
    * overlay = dilukis atas chart harga; selain itu dapat panel sendiri. */
   const DEFS = {
     ema: {
       name: 'EMA', desc: 'Exponential Moving Average', overlay: true,
       params: [{ k: 'period', label: 'Tempoh', def: 20 }], colors: ['#f5b301'],
       label: p => `EMA ${p.period}`,
-      outs: (c, p, col) => [{ data: ema(closes(c), p.period), color: col[0] }],
+      series: col => [{ color: col[0] }],
+      init: maInit,
+      step(s, c, p, col, o) { o[0] = emaStep(s, c.close, p.period); },
     },
     sma: {
       name: 'SMA', desc: 'Simple Moving Average', overlay: true,
       params: [{ k: 'period', label: 'Tempoh', def: 50 }], colors: ['#2962ff'],
       label: p => `SMA ${p.period}`,
-      outs: (c, p, col) => [{ data: sma(closes(c), p.period), color: col[0] }],
+      series: col => [{ color: col[0] }],
+      init: smaInit,
+      step(s, c, p, col, o) { o[0] = smaStep(s, c.close, p.period); },
     },
     bb: {
       name: 'Bollinger Bands', desc: 'Band volatiliti ± sisihan piawai', overlay: true,
       params: [{ k: 'period', label: 'Tempoh', def: 20 }, { k: 'mult', label: 'Std Dev', def: 2, step: 0.1 }],
       colors: ['#ff9800', '#2962ff', '#2962ff'],
       label: p => `BB ${p.period} ${p.mult}`,
-      outs: (c, p, col) => {
-        const v = closes(c), b = sma(v, p.period), s = stdev(v, p.period);
-        return [
-          { name: 'Basis', data: b, color: col[0] },
-          { name: 'Atas', data: b.map((x, i) => x == null ? null : x + p.mult * s[i]), color: col[1] },
-          { name: 'Bawah', data: b.map((x, i) => x == null ? null : x - p.mult * s[i]), color: col[2] },
-        ];
+      series: col => [{ name: 'Basis', color: col[0] }, { name: 'Atas', color: col[1] }, { name: 'Bawah', color: col[2] }],
+      init: smaInit,
+      step(s, c, p, col, o) {
+        const m = smaStep(s, c.close, p.period);
+        if (m == null) { o[0] = o[1] = o[2] = null; return; }
+        let v = 0; for (const x of s.buf) v += (x - m) * (x - m);
+        const sd = Math.sqrt(v / p.period);
+        o[0] = m; o[1] = m + p.mult * sd; o[2] = m - p.mult * sd;
       },
     },
     vwap: {
       name: 'VWAP', desc: 'Volume Weighted Average Price (reset harian UTC)', overlay: true,
       params: [], colors: ['#e040fb'], label: () => 'VWAP',
-      outs: (c, p, col) => [{ data: vwap(c), color: col[0] }],
+      series: col => [{ color: col[0] }],
+      init: () => ({ day: null, pv: 0, vv: 0 }),
+      step(s, c, p, col, o) {
+        const d = Math.floor(c.time / 86400);
+        if (d !== s.day) { s.day = d; s.pv = 0; s.vv = 0; }
+        const tp = (c.high + c.low + c.close) / 3;
+        s.pv += tp * c.volume; s.vv += c.volume;
+        o[0] = s.vv ? s.pv / s.vv : tp;
+      },
     },
     st: {
       name: 'Supertrend', desc: 'Trend ikut ATR — hijau naik, merah turun', overlay: true,
       params: [{ k: 'period', label: 'ATR', def: 10 }, { k: 'mult', label: 'Faktor', def: 3, step: 0.1 }],
       colors: ['#22c55e', '#ef4444'], label: p => `Supertrend ${p.period} ${p.mult}`,
-      outs: (c, p, col) => { const s = supertrend(c, p.period, p.mult); return [{ data: s.line, colors: s.up.map(u => u ? col[0] : col[1]), color: col[0], width: 2 }]; },
+      series: col => [{ color: col[0], width: 2, colored: true }],
+      init: () => ({ atr: atrInit(), fu: null, fl: null, up: true, pc: null }),
+      step(s, c, p, col, o, co) {
+        const pc = s.pc == null ? c.close : s.pc;
+        s.pc = c.close;
+        const a = atrStep(s.atr, c, p.period);
+        if (a == null) { o[0] = null; return; }
+        const hl2 = (c.high + c.low) / 2, bu = hl2 + p.mult * a, bl = hl2 - p.mult * a;
+        s.fu = s.fu == null || bu < s.fu || pc > s.fu ? bu : s.fu;
+        s.fl = s.fl == null || bl > s.fl || pc < s.fl ? bl : s.fl;
+        if (s.up && c.close < s.fl) s.up = false;
+        else if (!s.up && c.close > s.fu) s.up = true;
+        o[0] = s.up ? s.fl : s.fu; co[0] = s.up ? col[0] : col[1];
+      },
     },
     vol: {
       name: 'Volume', desc: 'Volume dagangan', overlay: true, volume: true,
       params: [], colors: ['#22c55e55', '#ef444455'], label: () => 'Vol',
-      outs: (c, p, col) => [{ kind: 'hist', data: c.map(x => x.volume), colors: c.map(x => x.close >= x.open ? col[0] : col[1]), color: col[0] }],
+      series: col => [{ kind: 'hist', color: col[0], colored: true }],
+      init: () => ({}),
+      step(s, c, p, col, o, co) { o[0] = c.volume; co[0] = c.close >= c.open ? col[0] : col[1]; },
     },
     rsi: {
       name: 'RSI', desc: 'Relative Strength Index', overlay: false, levels: [70, 30],
       params: [{ k: 'period', label: 'Tempoh', def: 14 }], colors: ['#a855f7'], label: p => `RSI ${p.period}`,
-      outs: (c, p, col) => [{ data: rsi(closes(c), p.period), color: col[0] }],
+      series: col => [{ color: col[0] }],
+      init: rsiInit,
+      step(s, c, p, col, o) { o[0] = rsiStep(s, c.close, p.period); },
     },
     macd: {
       name: 'MACD', desc: 'Moving Average Convergence Divergence', overlay: false, levels: [0],
       params: [{ k: 'fast', label: 'Laju', def: 12 }, { k: 'slow', label: 'Perlahan', def: 26 }, { k: 'signal', label: 'Signal', def: 9 }],
       colors: ['#2962ff', '#ff6d00', '#26a69a', '#ef5350'], label: p => `MACD ${p.fast} ${p.slow} ${p.signal}`,
-      outs: (c, p, col) => {
-        const r = macd(closes(c), p.fast, p.slow, p.signal);
-        return [
-          { name: 'Hist', kind: 'hist', data: r.hist, colors: r.hist.map(h => h >= 0 ? col[2] : col[3]), color: col[2] },
-          { name: 'MACD', data: r.m, color: col[0] },
-          { name: 'Signal', data: r.signal, color: col[1] },
-        ];
+      series: col => [{ name: 'Hist', kind: 'hist', color: col[2], colored: true }, { name: 'MACD', color: col[0] }, { name: 'Signal', color: col[1] }],
+      init: () => ({ f: maInit(), sl: maInit(), sg: maInit() }),
+      step(s, c, p, col, o, co) {
+        const f = emaStep(s.f, c.close, p.fast), sl = emaStep(s.sl, c.close, p.slow);
+        const m = f != null && sl != null ? f - sl : null;
+        const sg = m != null ? emaStep(s.sg, m, p.signal) : null;
+        const h = sg != null ? m - sg : null;
+        o[0] = h; co[0] = h >= 0 ? col[2] : col[3]; o[1] = m; o[2] = sg;
       },
     },
     stoch: {
       name: 'Stochastic', desc: 'Stochastic oscillator %K / %D', overlay: false, levels: [80, 20],
       params: [{ k: 'k', label: '%K', def: 14 }, { k: 'd', label: '%D', def: 3 }, { k: 'smooth', label: 'Smooth', def: 3 }],
       colors: ['#2962ff', '#ff6d00'], label: p => `Stoch ${p.k} ${p.d} ${p.smooth}`,
-      outs: (c, p, col) => { const r = stoch(c, p.k, p.d, p.smooth); return [{ name: '%K', data: r.k, color: col[0] }, { name: '%D', data: r.d, color: col[1] }]; },
+      series: col => [{ name: '%K', color: col[0] }, { name: '%D', color: col[1] }],
+      init: () => ({ h: [], l: [], k: smaInit(), d: smaInit() }),
+      step(s, c, p, col, o) {
+        s.h.push(c.high); s.l.push(c.low);
+        if (s.h.length > p.k) { s.h.shift(); s.l.shift(); }
+        if (s.h.length < p.k) { o[0] = o[1] = null; return; }
+        const hh = Math.max(...s.h), ll = Math.min(...s.l);
+        const raw = hh === ll ? 50 : (c.close - ll) / (hh - ll) * 100;
+        const k = smaStep(s.k, raw, p.smooth);
+        o[0] = k; o[1] = k != null ? smaStep(s.d, k, p.d) : null;
+      },
     },
     atr: {
       name: 'ATR', desc: 'Average True Range (volatiliti)', overlay: false,
       params: [{ k: 'period', label: 'Tempoh', def: 14 }], colors: ['#ef4444'], label: p => `ATR ${p.period}`,
-      outs: (c, p, col) => [{ data: atr(c, p.period), color: col[0] }],
+      series: col => [{ color: col[0] }],
+      init: atrInit,
+      step(s, c, p, col, o) { o[0] = atrStep(s, c, p.period); },
     },
   };
 
-  TD.ind = { sma, ema, rma, rsi, atr, macd, stoch, vwap, supertrend, heikinAshi, DEFS };
+  TD.ind = { sma, ema, rma, rsi, atr, heikinAshi, cloneState, DEFS };
 })();

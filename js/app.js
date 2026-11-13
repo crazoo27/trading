@@ -74,7 +74,12 @@
     lastSignalTime: 0,
   };
 
-  const persist = () => store.save({
+  // Simpanan ditangguh 400ms dan digabung: banyak perubahan berturut-turut = satu tulisan ke storage.
+  // persistNow() dipanggil bila app disorok/ditutup supaya tiada yang hilang.
+  let persistTimer = null;
+  const persist = () => { if (!persistTimer) persistTimer = setTimeout(persistNow, 400); };
+  const persistNow = () => { clearTimeout(persistTimer); persistTimer = null; store.save(snapshotState()); };
+  const snapshotState = () => ({
     symbol: S.symbol, interval: S.interval, chartType: S.chartType, watch: S.watch, indicators: S.indicators, drawings: S.drawings,
     balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen,
     magnet: S.magnet, priceMode: S.priceMode, sideTab: S.sideTab, sideCollapsed: S.sideCollapsed,
@@ -83,21 +88,25 @@
 
   // ---------- helpers ----------
   const decimalsFor = (p) => p >= 1000 ? 2 : p >= 10 ? 3 : p >= 1 ? 4 : p >= 0.01 ? 5 : p >= 0.0001 ? 7 : 8;
-  const fmt = (v, d = S.precision) => (v == null || !isFinite(v)) ? '—' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
+  // toLocaleString bina formatter baru setiap panggilan (perlahan); simpan satu formatter untuk setiap bilangan perpuluhan
+  const nfCache = [];
+  const nf = (d) => nfCache[d] || (nfCache[d] = new Intl.NumberFormat('en-US', { minimumFractionDigits: d, maximumFractionDigits: d }));
+  const fmt = (v, d = S.precision) => (v == null || !isFinite(v)) ? '—' : nf(d).format(v);
   // nilai wang disimpan dalam USD; dipaparkan dalam USD atau RM ikut tetapan
   const ccyFactor = () => S.ccy === 'MYR' ? S.fx : 1;
   const ccySym = () => S.ccy === 'MYR' ? 'RM' : '$';
   const fmtUsd = (v) => {
     if (v == null || !isFinite(v)) return '—';
     const x = v * ccyFactor();
-    return (x < 0 ? '-' : '') + ccySym() + Math.abs(x).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    return (x < 0 ? '-' : '') + ccySym() + nf(2).format(Math.abs(x));
   };
   const fmtR = (r) => (r == null || !isFinite(r)) ? '—' : (r >= 0 ? '+' : '') + r.toFixed(2) + 'R';
   const fmtBig = (v) => v >= 1e9 ? (v / 1e9).toFixed(2) + 'B' : v >= 1e6 ? (v / 1e6).toFixed(2) + 'M' : v >= 1e3 ? (v / 1e3).toFixed(1) + 'K' : v.toFixed(2);
   const fmtInd = (v) => v == null || !isFinite(v) ? '—' : Math.abs(v) >= 1e5 ? fmtBig(v) : fmt(v, Math.abs(v) < 1 ? 4 : Math.min(S.precision, 2) + (Math.abs(v) < 100 ? 0 : 0));
   const num = (v) => { const n = parseFloat(v); return isFinite(n) ? n : null; };
   const esc = (s) => String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const priceOf = (sym) => sym === S.symbol && S.candles.length ? S.candles[S.candles.length - 1].close : S.tickers[sym]?.price;
+  // S.stale = chart sedang papar candle dari cache (belum dikemas kini): jangan guna harganya untuk kiraan
+  const priceOf = (sym) => sym === S.symbol && S.candles.length && !S.stale ? S.candles[S.candles.length - 1].close : S.tickers[sym]?.price;
   const decOf = (sym) => decimalsFor(priceOf(sym) || 1);
   const tShift = (t) => t + TZ_SHIFT;
   const roundP = (v) => +(+v).toFixed(S.precision);
@@ -178,8 +187,8 @@
     for (const inst of S.indicators) {
       const def = I.DEFS[inst.type]; if (!def) continue;
       const pane = def.overlay ? 0 : paneIdx++;
-      const outs = def.outs(S.candles, inst.params, inst.colors);
-      const series = outs.map(o => {
+      const desc = def.series(inst.colors);
+      const series = desc.map(o => {
         const common = { priceLineVisible: false, visible: inst.visible !== false, crosshairMarkerVisible: false };
         if (o.kind === 'hist') {
           return chart.addSeries(LC.HistogramSeries, {
@@ -194,7 +203,7 @@
       });
       if (def.volume) series[0].priceScale().applyOptions({ scaleMargins: { top: 0.8, bottom: 0 } });
       if (def.levels) for (const lv of def.levels) series[series.length - 1].createPriceLine({ price: lv, color: 'rgba(120,123,134,.5)', lineStyle: 2, lineWidth: 1, axisLabelVisible: false });
-      indRT.push({ inst, def, series, pane, outs });
+      indRT.push({ inst, def, series, pane, desc, data: desc.map(() => []), colors: desc.map(() => null), snap: null, snapIdx: -1 });
     }
     while (chart.panes().length > paneIdx) chart.removePane(chart.panes().length - 1);
     const panes = chart.panes();
@@ -217,7 +226,7 @@
     for (const r of indRT) r.series.forEach(s => chart.removeSeries(s));
     indRT = [];
     buildIndicators();
-    for (const r of indRT) setIndData(r, true);
+    if (S.candles.length) for (const r of indRT) indFull(r);
     updateLegend();
     persist();
   }
@@ -229,34 +238,82 @@
     return src.map(bar);
   }
 
-  function setIndData(r, full) {
-    const outs = r.def.outs(S.candles, r.inst.params, r.inst.colors);
-    r.outs = outs;
+  // ---- indikator: kiraan penuh sekali, kemudian satu langkah sahaja setiap tick ----
+  const _o = [], _co = [];
+  const indPoint = (r, k, i) => {
+    const v = r.data[k][i], t = tShift(S.candles[i].time);
+    if (v == null) return { time: t };
+    return r.colors[k] ? { time: t, value: v, color: r.colors[k][i] } : { time: t, value: v };
+  };
+  function indStepInto(r, st, i) {
+    r.def.step(st, S.candles[i], r.inst.params, r.inst.colors, _o, _co);
+    for (let k = 0; k < r.desc.length; k++) {
+      r.data[k][i] = _o[k];
+      if (r.colors[k]) r.colors[k][i] = _co[k];
+    }
+  }
+  // kira semua candle, simpan state SEBELUM candle terakhir (untuk diulang setiap tick)
+  function indFull(r) {
     const n = S.candles.length;
-    outs.forEach((o, k) => {
-      const s = r.series[k];
-      const pt = (i) => o.data[i] == null ? { time: tShift(S.candles[i].time) } : { time: tShift(S.candles[i].time), value: o.data[i], ...(o.colors ? { color: o.colors[i] } : {}) };
-      if (full) s.setData(S.candles.map((_, i) => pt(i)));
-      else if (n) s.update(pt(n - 1));
-    });
+    r.data = r.desc.map(() => new Array(n));
+    r.colors = r.desc.map(d => d.colored ? new Array(n) : null);
+    const st = r.def.init(r.inst.params);
+    r.snap = I.cloneState(st); r.snapIdx = Math.max(0, n - 1);
+    for (let i = 0; i < n; i++) {
+      if (i === n - 1) r.snap = I.cloneState(st);
+      indStepInto(r, st, i);
+    }
+    r.series.forEach((s, k) => s.setData(S.candles.map((_, i) => indPoint(r, k, i))));
+  }
+  function indTick(r) {
+    const n = S.candles.length; if (!n) return;
+    if (!r.snap || r.snapIdx > n - 1 || n - 1 - r.snapIdx > 3) { indFull(r); return; }
+    // candle baru masuk: majukan state melepasi candle yang dah tutup
+    while (r.snapIdx < n - 1) { indStepInto(r, r.snap, r.snapIdx); r.snapIdx++; }
+    indStepInto(r, I.cloneState(r.snap), n - 1);
+    r.series.forEach((s, k) => s.update(indPoint(r, k, n - 1)));
   }
 
   function renderAll() {
+    renderDirty = false;
     if (!S.candles.length || !mainSeries) return;
     mainSeries.setData(mainBars());
-    for (const r of indRT) setIndData(r, true);
+    for (const r of indRT) indFull(r);
     renderMarkers();
     updateLegend(); updateHeader();
     drawings.redraw();
   }
 
   function renderLast() {
-    const n = S.candles.length; if (!n) return;
-    const bars = S.chartType === 'heikin' ? mainBars() : null;
+    renderDirty = false;
+    const n = S.candles.length; if (!n || !mainSeries) return;
     const c = S.candles[n - 1];
-    mainSeries.update(bars ? bars[n - 1] : (S.chartType === 'line' || S.chartType === 'area') ? { time: tShift(c.time), value: c.close } : bar(c));
-    for (const r of indRT) setIndData(r, false);
+    let pt;
+    if (S.chartType === 'heikin') {
+      // HA bergantung pada candle sebelumnya, tapi pengaruhnya susut separuh setiap candle: 60 candle dah cukup tepat
+      const ha = I.heikinAshi(S.candles.slice(-60)).pop();
+      pt = bar(ha);
+    } else pt = (S.chartType === 'line' || S.chartType === 'area') ? { time: tShift(c.time), value: c.close } : bar(c);
+    mainSeries.update(pt);
+    for (const r of indRT) indTick(r);
     scheduleLegend(); updateHeader();
+  }
+
+  // Tick harga dilukis paling kerap 10 kali sesaat (setiap lukisan = chart dilukis semula penuh oleh library),
+  // tak kira berapa laju tick masuk. Logik setup/alert tetap semak SETIAP tick — yang dihadkan cuma lukisan.
+  // rAF juga bermaksud tiada lukisan langsung bila app di latar belakang. Pan/zoom tak terjejas (library urus sendiri).
+  const RENDER_MIN_MS = 100;
+  let renderDirty = false, renderQueued = false, renderAt = 0;
+  function requestRender() {
+    renderDirty = true;
+    if (renderQueued) return;
+    renderQueued = true;
+    const run = () => requestAnimationFrame(() => {
+      renderQueued = false; renderAt = performance.now();
+      if (renderDirty) renderLast();
+    });
+    const wait = RENDER_MIN_MS - (performance.now() - renderAt);
+    if (wait > 16) setTimeout(run, wait); else run();
   }
 
   // ---------- signal engine (EMA20/50 + EMA200 + RSI14) ----------
@@ -304,9 +361,11 @@
     $('#legend').innerHTML =
       `<div class="main"><span class="title">${esc(S.symbol)} · ${S.interval} · ${sourceLabel()}</span>` +
       `<button class="lg-toggle" id="lgToggle" title="Tunjuk/sorok indikator">${S.legendOpen ? '▴' : '▾'}</button>` +
-      `<span class="ohlc" id="lgOhlc"></span></div>` +
+      `<span class="ohlc" id="lgOhlc"></span><span class="muted" id="lgState"></span></div>` +
       `<div class="lg-inds ${S.legendOpen ? '' : 'hidden'}">${indRT.filter(r => r.def.overlay).map(indRow).join('')}</div>`;
     $('#paneLegends').innerHTML = indRT.filter(r => !r.def.overlay).map(r => `<div class="pane-legend" data-pane="${r.pane}">${indRow(r)}</div>`).join('');
+    lgEls.ohlc = $('#lgOhlc');
+    lgEls.vals = new Map($$('[data-v]').map(el => [el.dataset.v, el]));
     requestAnimationFrame(() => requestAnimationFrame(positionPaneLegends));
   }
   function positionPaneLegends() {
@@ -326,13 +385,21 @@
     const prev = S.candles[i - 1];
     const col = c.close >= c.open ? 'pos' : 'neg';
     const ch = prev ? c.close - prev.close : 0, chp = prev ? ch / prev.close * 100 : 0;
-    const el = $('#lgOhlc');
-    if (el) el.innerHTML = `<span class="hl">O<b class="${col}">${fmt(c.open)}</b> H<b class="${col}">${fmt(c.high)}</b> L<b class="${col}">${fmt(c.low)}</b> </span>C<b class="${col}">${fmt(c.close)}</b> <b class="${ch >= 0 ? 'pos' : 'neg'}">${ch >= 0 ? '+' : ''}${fmt(ch)} (${chp >= 0 ? '+' : ''}${chp.toFixed(2)}%)</b>`;
+    // tulis ke DOM hanya bila teks betul-betul berubah
+    setHtml(lgEls.ohlc, `<span class="hl">O<b class="${col}">${fmt(c.open)}</b> H<b class="${col}">${fmt(c.high)}</b> L<b class="${col}">${fmt(c.low)}</b> </span>C<b class="${col}">${fmt(c.close)}</b> <b class="${ch >= 0 ? 'pos' : 'neg'}">${ch >= 0 ? '+' : ''}${fmt(ch)} (${chp >= 0 ? '+' : ''}${chp.toFixed(2)}%)</b>`);
     for (const r of indRT) {
-      const v = $(`[data-v="${r.inst.id}"]`); if (!v || !r.outs) continue;
-      v.innerHTML = r.outs.map(o => `<span style="color:${(o.colors ? o.colors[i] : o.color).slice(0, 7)}">${r.def.volume ? fmtBig(o.data[i] || 0) : fmtInd(o.data[i])}</span>`).join(' ');
+      const v = lgEls.vals.get(r.inst.id); if (!v) continue;
+      if (!v.isConnected || (r.def.overlay && !S.legendOpen)) continue;
+      let html = '';
+      for (let k = 0; k < r.desc.length; k++) {
+        const color = ((r.colors[k] && r.colors[k][i]) || r.desc[k].color).slice(0, 7);
+        html += `<span style="color:${color}">${r.def.volume ? fmtBig(r.data[k][i] || 0) : fmtInd(r.data[k][i])}</span> `;
+      }
+      setHtml(v, html);
     }
   }
+  const lgEls = { ohlc: null, vals: new Map() };
+  function setHtml(el, html) { if (el && el._h !== html) { el._h = html; el.innerHTML = html; } }
   chart.subscribeCrosshairMove(p => {
     hoverIdx = p && p.point && p.logical != null ? Math.round(p.logical) : null;
     scheduleLegend();
@@ -449,28 +516,71 @@
   const setConn = (ok) => { $('#connDot').className = 'dot ' + (ok ? 'ok' : 'bad'); };
   const sourceLabel = () => S.demo ? 'Demo' : feed ? feed.label : '…';
 
+  // ---- cache candle: buka app / tukar pair terus nampak chart, data baru menyusul ----
+  const CC_PREFIX = 'tradedesk.cc.', CC_INDEX = 'tradedesk.cc.index', CC_MAX = 6, CC_KEEP = 600;
+  const cacheKey = () => `${S.symbol}.${S.interval}`;
+  function saveCandleCache() {
+    // simpan hanya candle live yang memang milik pair+timeframe semasa
+    if (S.demo || S.stale || !feed || S.candlesKey !== cacheKey() || S.candles.length < 50) return;
+    try {
+      const key = cacheKey();
+      const rows = S.candles.slice(-CC_KEEP).map(c => [c.time, c.open, c.high, c.low, c.close, c.volume]);
+      localStorage.setItem(CC_PREFIX + key, JSON.stringify({ at: Date.now(), rows }));
+      const idx = JSON.parse(localStorage.getItem(CC_INDEX) || '[]').filter(k => k !== key);
+      idx.unshift(key);
+      for (const old of idx.splice(CC_MAX)) localStorage.removeItem(CC_PREFIX + old);
+      localStorage.setItem(CC_INDEX, JSON.stringify(idx));
+    } catch { /* storage penuh / disekat: cache bukan keperluan */ }
+  }
+  function loadCandleCache() {
+    try {
+      const j = JSON.parse(localStorage.getItem(CC_PREFIX + cacheKey()));
+      if (!j || !Array.isArray(j.rows) || j.rows.length < 50 || Date.now() - j.at > 7 * 864e5) return null;
+      return j.rows.map(r => ({ time: r[0], open: r[1], high: r[2], low: r[3], close: r[4], volume: r[5] }));
+    } catch { return null; }
+  }
+  const setState = (t) => { const el = $('#lgState'); if (el) el.textContent = t || ''; };
+
   async function loadSymbol() {
     const gen = ++feedGen;
     closeKline();
     $('#symName').textContent = S.symbol;
     drawings.load(S.drawings[S.symbol]);
-    buildLegend();
-    if (S.demo) { startDemo(gen); return; }
+    if (S.demo) { buildLegend(); startDemo(gen); return; }
+    // candle di skrin sekarang belum tentu milik pair/timeframe baru: jangan guna untuk kiraan sehingga data baru sampai
+    S.stale = true; S.candlesKey = null;
+    // permintaan yang dimulakan awal dalam <head> (sebelum skrip lain habis dimuat), kalau untuk pair yang sama
+    const early = TD.early && TD.early.key === `${S.symbol}|${S.interval}` ? TD.early : null;
+    TD.early = null;
+    // kalau data baru dah pun sampai, tak perlu lukis cache dulu (elak lukis chart dua kali)
+    const cached = early && early.settled ? null : loadCandleCache();
+    if (cached) { S.candles = cached; buildLegend(); afterLoad(); }
+    else buildLegend();
+    setState(cached ? 'mengemas kini…' : 'menyambung…');
+    await fetchFresh(gen, early ? early.promise : null, !!cached);
+  }
+  async function fetchFresh(gen, pending, hasCache) {
     try {
-      const r = await TD.feeds.history(S.symbol, S.interval, S.source, (label) => {
-        if (gen === feedGen && $('#lgOhlc')) $('#lgOhlc').textContent = `Menyambung ke ${label}…`;
-      });
+      const r = await (pending || TD.feeds.history(S.symbol, S.interval, S.source));
       if (gen !== feedGen) return;
       const changed = !feed || feed.id !== r.feed.id;
       feed = r.feed; S.source = feed.id; persist();
-      S.candles = r.candles;
+      S.candles = r.candles; S.candlesKey = cacheKey(); S.stale = false;
       buildLegend(); afterLoad(); openKline(gen);
+      saveCandleCache();
       if (changed) { allSymbols = null; restartTickers(true); }
     } catch (e) {
       if (gen !== feedGen) return;
       if (e.notFound) {
         toast('Pair tak dijumpai', `${S.symbol} tiada di sumber data yang boleh dicapai.`, 'bad');
         if (S.symbol !== 'BTCUSDT') { S.symbol = 'BTCUSDT'; persist(); renderWatch(); loadSymbol(); }
+        return;
+      }
+      // Ada chart sebenar untuk dipapar (dari cache), atau app memang pernah live dalam sesi ni:
+      // kekalkan chart tu dan cuba sambung semula sendiri, JANGAN tukar ke data demo rawak.
+      if (hasCache || feed) {
+        setConn(false); setState('tiada sambungan · mencuba semula…');
+        setTimeout(() => { if (gen === feedGen) fetchFresh(gen, null, hasCache); }, 8000);
         return;
       }
       toast('Tak dapat sambung ke sumber data', 'Binance, OKX dan Coinbase semua gagal. Tukar ke mod demo. Semak internet, kemudian matikan mod demo di Tetapan.', 'bad');
@@ -480,7 +590,8 @@
   }
   function afterLoad() {
     applyPrecision();
-    S.lastSignalTime = S.candles.length ? S.candles[S.candles.length - 1].time : 0;
+    // candle terakhir yang DAH tutup (yang sedang terbentuk masih boleh bagi signal bila ia tutup)
+    S.lastSignalTime = S.candles.length > 1 ? S.candles[S.candles.length - 2].time : 0;
     renderAll(); drawLines();
     chart.timeScale().setVisibleLogicalRange({ from: S.candles.length - 150, to: S.candles.length + 10 });
     renderSymDetail();
@@ -505,15 +616,37 @@
       },
     });
   }
-  // lepas putus sambungan: tarik balik candle yang terlepas, kemudian sambung semula
+  // lepas putus sambungan / app dibuka semula: tarik balik candle yang terlepas, kemudian sambung semula
   async function resync(gen) {
     try {
+      const lastSeen = !S.stale && S.candles.length ? S.candles[S.candles.length - 1].time : null;
       const c = await feed.history(S.symbol, S.interval);
       if (gen !== feedGen) return;
-      S.candles = c; renderAll(); drawLines();
-    } catch { /* cuba lagi */ }
+      S.candles = c; S.candlesKey = cacheKey(); S.stale = false;
+      renderAll(); drawLines(); setState('');
+      // Kejar balik: semak setup & alert terhadap candle yang terbentuk semasa app tak aktif,
+      // supaya TP/SL yang kena masa phone dikunci tetap direkod (ikut high/low setiap candle).
+      if (lastSeen != null) for (const k of c) if (k.time > lastSeen) onPrice(S.symbol, k.close, k.high, k.low);
+      S.lastSignalTime = c.length > 1 ? c[c.length - 2].time : 0;
+    } catch { /* cuba lagi pada pusingan seterusnya */ }
     if (gen === feedGen) openKline(gen);
   }
+  // sambung semula sekarang juga (tanpa tunggu soket sedar yang ia dah mati)
+  function refreshNow() {
+    if (S.demo) return;
+    if (!feed) { loadSymbol(); return; }
+    const gen = ++feedGen;
+    closeKline(); setConn(false); setState('mengemas kini…');
+    resync(gen); restartTickers(true);
+  }
+  let hiddenAt = 0;
+  document.addEventListener('visibilitychange', () => {
+    if (document.hidden) { hiddenAt = Date.now(); persistNow(); saveCandleCache(); return; }
+    const away = hiddenAt ? Date.now() - hiddenAt : 0; hiddenAt = 0;
+    if (away > 8000) refreshNow();
+  });
+  window.addEventListener('pagehide', () => { persistNow(); saveCandleCache(); });
+  window.addEventListener('online', refreshNow);
   function closeKline() {
     if (klineClose) { const f = klineClose; klineClose = null; f(); }
     clearInterval(demoTimer); demoTimer = null;
@@ -528,11 +661,19 @@
       lo = c.low < last.low ? c.low : Math.min(last.close, c.close);
       S.candles[n - 1] = c;
     } else if (!last || c.time > last.time) {
+      if (renderDirty) renderLast(); // pastikan rupa akhir candle lama dilukis sebelum candle baru masuk
       if (last && last.time !== S.lastSignalTime) onCandleClosed(n - 1);
       hi = c.high; lo = c.low;
-      S.candles.push(c); if (S.candles.length > 2000) S.candles.shift();
+      S.candles.push(c);
+      if (S.candles.length > 2400) {
+        // buang candle paling lama secara berkelompok dan kekalkan kedudukan pandangan pengguna
+        const cut = S.candles.length - 2000, vr = chart.timeScale().getVisibleLogicalRange();
+        S.candles.splice(0, cut);
+        renderAll();
+        if (vr) chart.timeScale().setVisibleLogicalRange({ from: vr.from - cut, to: vr.to - cut });
+      }
     } else return;
-    renderLast();
+    requestRender();
     S.tickers[S.symbol] = { ...(S.tickers[S.symbol] || {}), price: c.close };
     onPrice(S.symbol, c.close, hi, lo);
     if (closed) onCandleClosed(S.candles.length - 1);
@@ -587,6 +728,7 @@
     setConn(true); setModeBadge();
     const sec = INTERVAL_SEC[S.interval];
     const base = demoPx[S.symbol] || DEMO_BASE[S.symbol] || 100;
+    S.stale = false; S.candlesKey = null; // candle demo tak masuk cache
     const now = Math.floor(Date.now() / 1000);
     let t = Math.floor(now / sec) * sec - 999 * sec;
     // random walk yang ditarik balik ke paras asas (supaya harga kekal realistik)
@@ -840,17 +982,33 @@
   }
 
   // ---------- UI renders ----------
-  let uiPending = false;
+  // Panel sisi dikemas kini paling kerap 4 kali sesaat (bukan setiap tick), hanya tab yang sedang dibuka,
+  // dan langsung tidak bila app di latar belakang. Jimat CPU dan bateri.
+  let uiTimer = null, uiLast = 0;
   function scheduleUi() {
-    if (uiPending) return; uiPending = true;
-    requestAnimationFrame(() => { uiPending = false; renderWatchPrices(); renderOpenLive(); renderSymDetail(); });
+    if (uiTimer) return;
+    uiTimer = setTimeout(() => {
+      uiTimer = null; uiLast = performance.now();
+      if (!document.hidden) renderUi();
+    }, Math.max(0, 250 - (performance.now() - uiLast)));
   }
+  function renderUi() {
+    if (S.sideCollapsed) return;
+    if (S.sideTab === 'watch') { renderWatchPrices(); renderSymDetail(); }
+    else if (S.sideTab === 'open') renderOpenLive();
+  }
+  const setText = (el, t) => { if (el && el._t !== t) { el._t = t; el.textContent = t; } };
   function setModeBadge() { $('#modeBadge').textContent = S.demo ? 'DEMO' : 'LIVE'; $('#modeBadge').classList.toggle('demo', S.demo); }
 
+  let titleAt = 0, lastTitle = '';
   function updateHeader() {
     const n = S.candles.length; if (!n) return;
-    const px = S.candles[n - 1].close;
-    document.title = `${S.symbol} ${fmt(px)} · TradeDesk`;
+    const now = performance.now();
+    if (now - titleAt > 1000) { // tajuk tab: sekali sesaat dah memadai
+      titleAt = now;
+      const t = `${S.symbol} ${fmt(S.candles[n - 1].close)} · TradeDesk`;
+      if (t !== lastTitle) document.title = lastTitle = t;
+    }
     if (S.draft.type === 'market') renderCalc();
   }
 
@@ -867,25 +1025,32 @@
       const [b, q] = splitSym(s);
       return `<div class="wl-row ${s === S.symbol ? 'on' : ''}" data-s="${esc(s)}"><b>${esc(b)}<span class="muted">${esc(q)}</span></b><span data-p="${esc(s)}">—</span><span data-c="${esc(s)}"></span><button class="x" data-rm="${esc(s)}" title="Buang">✕</button></div>`;
     }).join('');
+    wlEls = new Map(S.watch.map(s => [s, { p: $(`[data-p="${s}"]`), c: $(`[data-c="${s}"]`) }]));
     renderWatchPrices();
   }
+  let wlEls = new Map();
   function renderWatchPrices() {
-    for (const s of S.watch) {
-      const t = S.tickers[s]; const pEl = $(`[data-p="${s}"]`); const cEl = $(`[data-c="${s}"]`);
-      if (!t || !pEl) continue;
-      pEl.textContent = fmt(t.price, decimalsFor(t.price));
-      if (t.open) { const ch = (t.price - t.open) / t.open * 100; cEl.textContent = (ch >= 0 ? '+' : '') + ch.toFixed(2) + '%'; cEl.className = ch >= 0 ? 'pos' : 'neg'; }
+    for (const [s, el] of wlEls) {
+      const t = S.tickers[s];
+      if (!t || !el.p) continue;
+      setText(el.p, fmt(t.price, decimalsFor(t.price)));
+      if (t.open) {
+        const ch = (t.price - t.open) / t.open * 100, cls = ch >= 0 ? 'pos' : 'neg';
+        setText(el.c, (ch >= 0 ? '+' : '') + ch.toFixed(2) + '%');
+        if (el.c.className !== cls) el.c.className = cls;
+      }
     }
   }
+  let symDetailEl = null;
   function renderSymDetail() {
     const t = S.tickers[S.symbol]; const px = priceOf(S.symbol);
     if (px == null) return;
     const ch = t?.open ? (px - t.open) / t.open * 100 : null;
-    $('#symDetail').innerHTML =
+    setHtml(symDetailEl || (symDetailEl = $('#symDetail')),
       `<div class="big">${fmt(px)} <span class="${ch >= 0 ? 'pos' : 'neg'}" style="font-size:14px">${ch != null ? (ch >= 0 ? '+' : '') + ch.toFixed(2) + '%' : ''}</span></div>` +
       `<span>Simbol</span><b>${esc(S.symbol)}</b>` +
       (t?.high ? `<span>Tinggi 24j</span><b>${fmt(t.high)}</b><span>Rendah 24j</span><b>${fmt(t.low)}</b>` : '') +
-      (t?.qvol ? `<span>Vol 24j</span><b>${fmtBig(t.qvol)} ${esc(splitSym(S.symbol)[1])}</b>` : '');
+      (t?.qvol ? `<span>Vol 24j</span><b>${fmtBig(t.qvol)} ${esc(splitSym(S.symbol)[1])}</b>` : ''));
   }
 
   function setupCard(s, closed) {
@@ -920,11 +1085,12 @@
       const px = priceOf(s.symbol), d = decimalsFor(s.entry);
       if (s.status === 'pending') {
         const dist = px != null ? Math.abs(px - s.entry) / px * 100 : null;
-        el.innerHTML = `<span class="muted">Harga ${fmt(px, d)} · ${dist != null ? dist.toFixed(2) + '% ke entry' : ''}</span>`;
+        setHtml(el, `<span class="muted">Harga ${fmt(px, d)} · ${dist != null ? dist.toFixed(2) + '% ke entry' : ''}</span>`);
       } else {
         const r = liveR(s, px);
-        el.className = 'pnl ' + (r >= 0 ? 'pos' : 'neg');
-        el.textContent = `${fmtR(r)} · ${fmtUsd(r * s.riskUsd)}  @ ${fmt(px, d)}`;
+        const cls = 'pnl ' + (r >= 0 ? 'pos' : 'neg');
+        if (el.className !== cls) el.className = cls;
+        setHtml(el, `${fmtR(r)} · ${fmtUsd(r * s.riskUsd)}  @ ${fmt(px, d)}`);
       }
     }
   }
@@ -954,6 +1120,7 @@
     $('#side').classList.toggle('collapsed', S.sideCollapsed);
     $$('#rail button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.sideTab && !S.sideCollapsed));
     $$('.tab-body').forEach(b => b.classList.toggle('hidden', b.dataset.body !== S.sideTab));
+    renderUi();
     persist();
   }
 
@@ -1265,6 +1432,7 @@
 
   // jam + countdown candle
   setInterval(() => {
+    if (document.hidden) return; // jam & countdown tak perlu jalan bila app di latar belakang
     const d = new Date(), off = -d.getTimezoneOffset() / 60;
     $('#clock').textContent = d.toLocaleTimeString('en-GB') + ` (UTC${off >= 0 ? '+' : ''}${off})`;
     drawings.redraw();
@@ -1284,5 +1452,10 @@
   createMain(); buildIndicators();
   loadSymbol(); restartTickers(true);
 
-  window.TradeDesk = { S, chart, drawings, onPrice, suggestSetup, get mainSeries() { return mainSeries; } };
+  // service worker: fail app disimpan dalam phone, jadi buka kali kedua dan seterusnya hampir serta-merta
+  if ('serviceWorker' in navigator && window.isSecureContext) {
+    window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
+  }
+
+  window.TradeDesk = { S, chart, drawings, onPrice, onKline, suggestSetup, refreshNow, _ind: () => indRT, get mainSeries() { return mainSeries; } };
 })();

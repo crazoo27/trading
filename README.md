@@ -40,6 +40,23 @@ Boleh juga deploy sebagai static site (GitHub Pages / Netlify / Vercel) supaya b
 - Signal auto (EMA20/50 cross ikut EMA200, RSI keluar 30/70), alert harga, jurnal (win rate, jumlah R, P/L)
 - Notifikasi: toast + bunyi + notifikasi browser
 
+## Prestasi
+
+Diukur pada CPU phone simulasi (4x lebih perlahan), latency rangkaian 250 ms:
+
+| | Sebelum | Selepas |
+|---|---|---|
+| Chart pertama (lawatan pertama) | 3.75 s | 1.2 s |
+| Buka semula app | 3.75 s | 0.9 s |
+| Kos setiap tick harga | 4.4 ms | 0.02 ms |
+| Kelancaran pada 50 tick/saat | 27 fps, 27 frame tersekat | 58 fps, 0 tersekat |
+
+- **Indikator inkremental**: setiap indikator ialah "stepper"; setiap tick cuma kira candle terakhir, bukan semua candle
+- **Lukisan dihadkan** kepada 10 kali sesaat untuk tick harga, dan berhenti terus bila app di latar belakang; panel sisi 4 kali sesaat, hanya tab yang dibuka
+- **Muat turun selari**: semua halaman candle diminta serentak, dan permintaan dimulakan dalam `<head>` sebelum skrip chart siap dimuat
+- **Cache**: service worker simpan fail app (buka serta-merta, boleh buka offline); 600 candle terakhir disimpan untuk setiap pair/timeframe
+- **Sambung semula pintar**: watchdog kesan sambungan yang mati senyap; bila app kembali aktif, data ditarik semula serta-merta
+
 ## Shortcut
 
 | Kekunci | Fungsi |
@@ -53,7 +70,7 @@ Boleh juga deploy sebagai static site (GitHub Pages / Netlify / Vercel) supaya b
 ## Nota
 
 - Semua data (lukisan, indikator, setup, jurnal) disimpan dalam `localStorage` browser sahaja.
-- Pemantauan jalan **selagi tab terbuka**. Aktifkan notifikasi browser di Tetapan.
-- Kalau Binance tak dapat dicapai, app tukar automatik ke **mod demo** (data simulasi).
+- Pemantauan jalan **selagi tab terbuka**. Aktifkan notifikasi browser di Tetapan. Bila app dibuka semula selepas phone dikunci, candle yang terlepas disemak balik supaya TP/SL yang kena tetap direkod (untuk pair yang sedang dibuka).
+- Kalau tiada sumber data dapat dicapai dan tiada chart tersimpan, app tukar ke **mod demo** (data simulasi). Kalau ada chart tersimpan, ia kekal dipapar dan app cuba sambung semula sendiri.
 - App ni untuk analisis & rancang. Ia **tak** letak order sebenar di exchange.
 - Chart dikuasakan oleh [Lightweight Charts](https://github.com/tradingview/lightweight-charts) (Apache-2.0), dalam `lib/`.
