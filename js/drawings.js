@@ -218,6 +218,24 @@ TD.createDrawings = function (ctx) {
         break;
       }
     }
+    if (d.alertOn) alertMark(g, d, P, size);
+  }
+
+  // tanda 🔔 untuk lukisan yang ada alert; trend line disambung ke kanan (paras yang akan trigger alert)
+  function alertMark(g, d, P, size) {
+    let x, y;
+    if (d.type === 'hline') { x = size.width - 16; y = P[0].y; }
+    else if (d.type === 'rect') { x = Math.max(P[0].x, P[1].x); y = Math.min(P[0].y, P[1].y); }
+    else {
+      const right = P[0].x <= P[1].x ? P[1] : P[0], left = right === P[1] ? P[0] : P[1];
+      if (d.type === 'trend' && right.x < size.width) {
+        const k = (right.y - left.y) / ((right.x - left.x) || 1);
+        line(g, right.x, right.y, size.width, right.y + k * (size.width - right.x), d.color || '#2962ff', 1, [5, 4]);
+      }
+      x = Math.min(right.x, size.width - 16); y = right.y;
+    }
+    g.font = '14px sans-serif'; g.textAlign = 'center'; g.textBaseline = 'bottom';
+    g.fillText('🔔', x, y - 4);
   }
 
   function drawPosition(g, d, P, sel) {
@@ -437,6 +455,9 @@ TD.createDrawings = function (ctx) {
     setTool, getTool: () => tool,
     load(list) { items = (list || []).map(d => ({ ...d })); undoStack = []; selectedId = null; creating = null; ctx.onSelect(null); requestUpdate(); },
     selected: () => items.find(d => d.id === selectedId) || null,
+    list: () => items,
+    // ubah lukisan tanpa undo/pilihan (cth bila alert garisan dah trigger)
+    patch(id, p) { const d = items.find(x => x.id === id); if (!d) return; Object.assign(d, p); commit(); if (d.id === selectedId) ctx.onSelect(d); },
     update(patch) { const d = items.find(x => x.id === selectedId); if (!d) return; pushUndo(); Object.assign(d, patch); commit(); ctx.onSelect(d); },
     removeSelected() { if (!selectedId) return; pushUndo(); items = items.filter(d => d.id !== selectedId); selectedId = null; ctx.onSelect(null); commit(); },
     clearAll() { if (!items.length) return; pushUndo(); items = []; selectedId = null; ctx.onSelect(null); commit(); },

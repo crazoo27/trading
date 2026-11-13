@@ -135,7 +135,7 @@
     money: (v) => fmtUsd(v),
     getAtr: () => { const a = I.atr(S.candles, 14); return a[a.length - 1]; },
     defaultColor: (t) => ({ hline: '#f5b301', rect: '#9c27b0', text: '#2962ff' }[t] || '#2962ff'),
-    onChange: (list) => { S.drawings[S.symbol] = list; persist(); },
+    onChange: (list) => { S.drawings[S.symbol] = list; persist(); renderAlerts(); },
     onSelect: (d) => renderSelBar(d),
     onTool: (t) => {
       $$('#drawbar [data-tool]').forEach(b => b.classList.toggle('on', b.dataset.tool === t));
@@ -362,6 +362,7 @@
     if (!pos && d.type !== 'measure') html += SWATCH.map(c => `<span class="sw ${d.color === c ? 'on' : ''}" data-c="${c}" style="background:${c}"></span>`).join('');
     if (pos) html += `<button class="b go" data-b="track">▶ Pantau setup</button>${S.spotOnly ? '' : '<button class="b" data-b="flip" title="Tukar long/short">⇅</button>'}`;
     if (d.type === 'text') html += `<button class="b" data-b="edit">✎</button>`;
+    if (ALERTABLE[d.type]) html += `<button class="b ${d.alertOn ? 'on' : ''}" data-b="alert" title="Alert bila harga sentuh">${d.alertOn ? '🔕 Matikan' : '🔔 Alert'}</button>`;
     html += `<button class="b" data-b="del" title="Padam (Del)"><svg><use href="#i-trash"/></svg></button>`;
     el.innerHTML = html;
     el.classList.remove('hidden');
@@ -381,6 +382,15 @@
       drawings.update({ type: d.type === 'long' ? 'short' : 'long', tp: 2 * e0 - d.tp, sl: 2 * e0 - d.sl });
     }
     if (b.dataset.b === 'track') positionToSetup(d);
+    if (b.dataset.b === 'alert') {
+      const on = !d.alertOn;
+      delete lineSide[d.id];
+      drawings.update({ alertOn: on });
+      restartTickers();
+      if (on) toast('Alert garisan aktif', d.type === 'rect'
+        ? 'Kau akan dapat notifikasi bila harga MASUK zon ni (sekali sahaja).'
+        : 'Kau akan dapat notifikasi bila harga SENTUH atau PECAH garisan ni (sekali sahaja).', 'good');
+    }
   });
   function positionToSetup(d) {
     S.draft = { ...S.draft, dir: d.type, type: 'limit', entry: roundP(d.pts[0].p), sl: roundP(d.sl), tp1: roundP(d.tp), tp2: null, note: S.draft.note || `${d.type === 'long' ? 'Long' : 'Short'} position tool` };
@@ -547,6 +557,7 @@
     const set = new Set(S.watch);
     S.setups.filter(isOpen).forEach(s => set.add(s.symbol));
     S.alerts.forEach(a => set.add(a.symbol));
+    for (const [sym, list] of Object.entries(S.drawings)) if ((list || []).some(d => d.alertOn)) set.add(sym);
     set.add(S.symbol);
     return [...set];
   }
@@ -626,7 +637,55 @@
     return s.tp1Hit && s.tp2 ? 0.5 * rAt(s, s.tp1) + 0.5 * r : r;
   }
 
+  // ---------- alert pada garisan / zon ----------
+  const ALERTABLE = { hline: 'Garisan mendatar', trend: 'Trend line', ray: 'Ray', rect: 'Zon' };
+  const lineSide = {}; // id lukisan -> kedudukan harga terakhir (1 atas, -1 bawah, 0 dalam zon)
+  // harga garisan pada masa t (garisan dianggap lurus ikut masa; trend line disambung ke kanan)
+  function linePriceAt(d, t) {
+    if (d.type === 'hline') return d.pts[0].p;
+    const [a, b] = d.pts;
+    if (a.t === b.t) return null;
+    if (t < Math.min(a.t, b.t)) return null;
+    return a.p + (b.p - a.p) * (t - a.t) / (b.t - a.t);
+  }
+  function drawingsOf(sym) { return sym === S.symbol ? drawings.list() : (S.drawings[sym] || []); }
+  function patchDrawing(sym, id, p) {
+    if (sym === S.symbol) drawings.patch(id, p);
+    else { const d = (S.drawings[sym] || []).find(x => x.id === id); if (d) { Object.assign(d, p); persist(); } }
+  }
+  function checkLineAlerts(sym, price, hi, lo) {
+    const now = Date.now() / 1000;
+    const fired = [];
+    for (const d of drawingsOf(sym)) {
+      if (!d.alertOn) continue;
+      const dec = decOf(sym);
+      if (d.type === 'rect') {
+        const top = Math.max(d.pts[0].p, d.pts[1].p), bot = Math.min(d.pts[0].p, d.pts[1].p);
+        const side = price > top ? 1 : price < bot ? -1 : 0;
+        const prev = lineSide[d.id]; lineSide[d.id] = side;
+        const entered = lo <= top && hi >= bot && (prev == null ? side === 0 : prev !== 0);
+        if (!entered) continue;
+        fired.push([d, `🔔 Harga masuk zon · ${sym}`, `Zon ${fmt(bot, dec)} – ${fmt(top, dec)}, harga sekarang ${fmt(price, dec)}${prev === 1 ? ' (turun dari atas)' : prev === -1 ? ' (naik dari bawah)' : ''}`]);
+        continue;
+      }
+      const L = linePriceAt(d, now); if (L == null) continue;
+      const side = price >= L ? 1 : -1;
+      const prev = lineSide[d.id]; lineSide[d.id] = side;
+      const crossed = prev != null && prev !== side;
+      if (!crossed && !(lo <= L && hi >= L)) continue;
+      const how = crossed ? (side > 0 ? 'pecah ke ATAS' : 'pecah ke BAWAH') : 'sentuh garisan';
+      fired.push([d, `🔔 ${ALERTABLE[d.type]} · ${sym}`, `Harga ${how} pada ${fmt(L, dec)} (sekarang ${fmt(price, dec)})`]);
+    }
+    // alert sekali sahaja: matikan selepas trigger supaya tak spam
+    for (const [d, title, body] of fired) {
+      patchDrawing(sym, d.id, { alertOn: false, alertHitAt: Date.now() });
+      notify(title, body, 'info', sym !== S.symbol ? { label: 'Buka chart', fn: () => goSymbol(sym) } : null);
+    }
+    if (fired.length) { renderAlerts(); restartTickers(); }
+  }
+
   function onPrice(sym, price, hi = price, lo = price) {
+    checkLineAlerts(sym, price, hi, lo);
     let changed = false;
     for (const s of S.setups) {
       if (s.symbol !== sym || !isOpen(s)) continue;
@@ -870,8 +929,11 @@
     }
   }
   function renderAlerts() {
-    $('#alertList').innerHTML = S.alerts.length ? S.alerts.map(a => `<div class="card"><div class="hd"><b data-go="${esc(a.symbol)}">${esc(a.symbol)}</b><span>${a.dir === 'up' ? '↑ naik ke' : '↓ turun ke'} <b>${fmt(a.price, decimalsFor(a.price))}</b> <button class="btn small ghost" data-rmalert="${a.id}">✕</button></span></div></div>`).join('')
-      : '<div class="empty">Tiada alert harga.</div>';
+    const priceCards = S.alerts.map(a => `<div class="card"><div class="hd"><b data-go="${esc(a.symbol)}">${esc(a.symbol)}</b><span>${a.dir === 'up' ? '↑ naik ke' : '↓ turun ke'} <b>${fmt(a.price, decimalsFor(a.price))}</b> <button class="btn small ghost" data-rmalert="${a.id}">✕</button></span></div></div>`);
+    const lineCards = Object.keys(S.drawings).flatMap(sym => drawingsOf(sym).filter(d => d.alertOn).map(d =>
+      `<div class="card"><div class="hd"><b data-go="${esc(sym)}">${esc(sym)}</b><span>🔔 ${ALERTABLE[d.type]} <button class="btn small ghost" data-rmline="${esc(sym)}|${d.id}">✕</button></span></div></div>`));
+    $('#alertList').innerHTML = priceCards.concat(lineCards).join('') ||
+      '<div class="empty">Tiada alert.<br>Taip harga di atas, atau lukis garisan / zon pada chart, pilih, dan tekan 🔔 Alert.</div>';
     $('#logList').innerHTML = S.log.slice(0, 40).map(l => `<div class="card"><time>${new Date(l.t).toLocaleTimeString('ms-MY', { hour: '2-digit', minute: '2-digit' })}</time><b>${esc(l.title)}</b> — ${esc(l.body)}</div>`).join('') || '<div class="empty">Belum ada notifikasi.</div>';
   }
   function renderJournal() {
@@ -1123,6 +1185,8 @@
     }
     const rma = e.target.closest('[data-rmalert]');
     if (rma) { S.alerts = S.alerts.filter(a => a.id !== rma.dataset.rmalert); persist(); renderAlerts(); drawLines(); restartTickers(); }
+    const rml = e.target.closest('[data-rmline]');
+    if (rml) { const [sym, id] = rml.dataset.rmline.split('|'); patchDrawing(sym, id, { alertOn: false }); renderAlerts(); restartTickers(); }
   });
 
   $('#btnAddAlert').onclick = () => {

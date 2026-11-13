@@ -36,6 +36,7 @@ Boleh juga deploy sebagai static site (GitHub Pages / Netlify / Vercel) supaya b
 - Setup builder: entry/SL/TP1/TP2, kalkulator saiz posisi, amaran R:R < 1 dan leverage
 - ⚡ Cadang setup: trend EMA200 + SL 1.5×ATR, TP 1.5R / 3R
 - Setup dipantau live: Tunggu entry → Aktif → TP1 (50% tutup, SL ke breakeven) → TP2 / SL, dengan P/L dalam R dan $
+- **Alert pada garisan & zon**: pilih garisan mendatar, trend line, ray atau zon, tekan 🔔 Alert. Notifikasi bila harga sentuh/pecah garisan atau masuk zon (juga untuk pair lain dalam watchlist)
 - Signal auto (EMA20/50 cross ikut EMA200, RSI keluar 30/70), alert harga, jurnal (win rate, jumlah R, P/L)
 - Notifikasi: toast + bunyi + notifikasi browser
 
