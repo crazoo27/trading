@@ -60,6 +60,7 @@
     dailyR: saved.dailyR ?? 3,
     btFee: saved.btFee ?? 0.1,
     anaZones: saved.anaZones ?? true,
+    anaConfirm: saved.anaConfirm ?? false,
     source: saved.source || null,
     magnet: saved.magnet ?? false,
     hideDrawings: false,
@@ -84,7 +85,7 @@
   const persistNow = () => { clearTimeout(persistTimer); persistTimer = null; store.save(snapshotState()); };
   const snapshotState = () => ({
     symbol: S.symbol, interval: S.interval, chartType: S.chartType, watch: S.watch, indicators: S.indicators, drawings: S.drawings,
-    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen, dailyR: S.dailyR, btFee: S.btFee, anaZones: S.anaZones,
+    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen, dailyR: S.dailyR, btFee: S.btFee, anaZones: S.anaZones, anaConfirm: S.anaConfirm,
     magnet: S.magnet, priceMode: S.priceMode, sideTab: S.sideTab, sideCollapsed: S.sideCollapsed,
     setups: S.setups, alerts: S.alerts, log: S.log.slice(0, 100),
   });
@@ -1467,17 +1468,26 @@
   const HTF = { '1m': ['15m', '1h'], '3m': ['15m', '1h'], '5m': ['1h', '4h'], '15m': ['1h', '4h'], '30m': ['4h', '1d'], '1h': ['4h', '1d'], '2h': ['1d', '1w'], '4h': ['1d', '1w'], '1d': ['1w'], '1w': [] };
   const TF_NAME = (tf) => tf.replace('m', ' minit').replace('h', ' jam').replace('d', ' hari').replace('w', ' minggu');
   const htfCache = new Map();
-  async function getHTF(tf) {
-    const key = `${S.symbol}|${tf}|${S.demo ? 'demo' : feed ? feed.id : '-'}`;
+  async function getHTF(tf, sym = S.symbol) {
+    const key = `${sym}|${tf}|${S.demo ? 'demo' : feed ? feed.id : '-'}`;
     const hit = htfCache.get(key);
     if (hit && Date.now() - hit.at < 5 * 60e3) return hit.c;
     let c = null;
-    if (!S.demo && feed) { try { c = await feed.history(S.symbol, tf); } catch { c = null; } }
+    if (!S.demo && feed) { try { c = await feed.history(sym, tf); } catch { c = null; } }
     // sandaran: bina dari candle semasa (sejarah lebih pendek, tapi masih beri gambaran arah)
-    if (!c || c.length < 60) c = A.aggregate(S.candles, INTERVAL_SEC[tf]);
-    htfCache.set(key, { at: Date.now(), c });
+    if ((!c || c.length < 60) && sym === S.symbol) c = A.aggregate(S.candles, INTERVAL_SEC[tf]);
+    if (c) htfCache.set(key, { at: Date.now(), c });
     return c;
   }
+  // Altcoin biasanya ikut BTC: rujuk trend BTC pada TF besar pertama (bukan untuk BTC sendiri / pair bukan stablecoin)
+  const STABLE_Q = ['USDT', 'USDC', 'FDUSD', 'TUSD', 'BUSD'];
+  const btcTfFor = (iv, sym = S.symbol) => {
+    const [b, q] = splitSym(sym);
+    if (b === 'BTC' || !STABLE_Q.includes(q)) return null;
+    return (HTF[iv] || [])[0] || iv;
+  };
+  // hanya candle yang DAH TUTUP (candle terakhir sedang terbentuk) supaya live = peraturan backtest
+  const closedOf = (c) => c.length > 61 ? c.slice(0, -1) : c;
 
   let anaTimer = null, anaDirty = true, anaRun = 0, lastPlan = null;
   function scheduleAnalysis() {
@@ -1496,10 +1506,18 @@
     for (const tf of tfs) {
       const c = await getHTF(tf);
       if (run !== anaRun || key !== `${S.symbol}|${S.interval}`) return; // pengguna dah tukar pair/TF
-      htf.push({ tf, info: A.trendInfo(c) });
+      htf.push({ tf, info: A.trendInfo(closedOf(c)) });
     }
-    const p = A.plan(S.candles, htf, { spotOnly: S.spotOnly, feePct: S.btFee });
-    lastPlan = { ...p, symbol: S.symbol, interval: S.interval, htf };
+    let btcDir = null;
+    const btf = btcTfFor(S.interval);
+    if (btf) {
+      const bc = await getHTF(btf, 'BTCUSDT');
+      if (run !== anaRun || key !== `${S.symbol}|${S.interval}`) return;
+      const bi = bc && bc.length >= 60 ? A.trendInfo(closedOf(bc)) : null;
+      btcDir = bi ? bi.dir : null;
+    }
+    const p = A.plan(closedOf(S.candles), htf, { spotOnly: S.spotOnly, feePct: S.btFee, requireConfirm: S.anaConfirm, btcDir, livePx: S.candles[S.candles.length - 1].close });
+    lastPlan = { ...p, symbol: S.symbol, interval: S.interval, htf, btcDir, btcTf: btf };
     const z = p.zones;
     drawings.setZones(S.anaZones && z ? [...z.above, ...z.inside, ...z.below] : []);
     renderAnalysis(lastPlan);
@@ -1511,14 +1529,11 @@
   async function historyRecord(run, key, tfs) {
     const el = () => $('#anaRec');
     const lastT = S.candles.length ? S.candles[S.candles.length - 1].time : 0;
-    const cKey = `${key}|${S.spotOnly ? 's' : 'a'}|${S.btFee}`;
+    const cKey = `${key}|${S.spotOnly ? 's' : 'a'}|${S.btFee}|${S.anaConfirm ? 'c' : 'l'}`;
     let hit = recCache.get(cKey);
     if (!hit || lastT - hit.lastT > 8 * INTERVAL_SEC[S.interval]) {
       if (el()) el().innerHTML = '<span class="muted">Menguji analisis ni pada sejarah pair ni…</span>';
-      const htfData = [];
-      for (const tf of tfs) htfData.push(await getHTF(tf));
-      const bt = await A.backtestPlan(S.candles.slice(), INTERVAL_SEC[S.interval], tfs.map(tf => INTERVAL_SEC[tf]),
-        { feePct: S.btFee, allowShort: !S.spotOnly, minGrade: 'B', htfData, yieldEvery: 40, cancelled: () => run !== anaRun });
+      const bt = await runEngineBacktest(closedOf(S.candles), S.interval, { minGrade: 'B', manage: 'split', requireConfirm: S.anaConfirm, yieldEvery: 40, cancelled: () => run !== anaRun });
       if (!bt) return;
       hit = { lastT, bt };
       recCache.set(cKey, hit);
@@ -1526,11 +1541,30 @@
     if (run !== anaRun || !el()) return;
     const bt = hit.bt, j = A.judge(bt);
     const days = Math.round((bt.to - bt.from) / 86400);
+    const g = bt.groups;
+    const grp = (name, x) => x.n ? `<span>${name}</span><b class="${x.expectancy > 0 ? 'pos' : 'neg'}">${x.n} trade · ${x.winRate.toFixed(0)}% · ${fmtR(x.expectancy)}</b>` : '';
+    // padankan rekod dengan keputusan semasa: "bila analisis bagi gred X sebelum ni, macam mana?"
+    const cur = lastPlan && lastPlan.grade && lastPlan.verdict !== 'TUNGGU' ? g[lastPlan.grade] : null;
     el().innerHTML = bt.n
       ? `<b class="${bt.expectancy > 0 ? 'pos' : 'neg'}">${bt.n} setup lepas: win rate ${bt.winRate.toFixed(0)}%, purata ${fmtR(bt.expectancy)} setiap trade</b>
-         <span class="muted"> dalam ${days} hari (${esc(S.symbol)} ${esc(S.interval)}, yuran ${bt.feePct}%).</span>
+         <span class="muted"> dalam ${days} hari (${esc(S.symbol)} ${esc(S.interval)}, yuran ${bt.feePct}%, ${S.anaConfirm ? 'mod pengesahan' : 'order limit'}, 50% di TP1 + BE).</span>
+         ${cur && cur.n ? `<div class="rec-j ${cur.expectancy > 0 ? 'good' : 'bad'}">Setup sekarang gred ${lastPlan.grade}: sebelum ni gred ${lastPlan.grade} pada pair ni ${cur.n} kali, menang ${cur.winRate.toFixed(0)}%, purata ${fmtR(cur.expectancy)}.</div>` : ''}
+         <div class="ana-kv">${grp('Gred A', g.A)}${grp('Gred B', g.B)}${grp('Setup trend', g.trend)}${grp('Setup julat', g.julat)}</div>
          <div class="rec-j ${j.level}">${esc(j.text)}</div>`
       : `<span class="muted">Tiada setup gred A/B dalam ${days} hari sejarah ni. Analisis ni sangat memilih pada pair/TF ni.</span>`;
+  }
+
+  // Jalankan backtest enjin analisis dengan data TF besar & BTC yang sama seperti analisis live
+  async function runEngineBacktest(candles, iv, o) {
+    const tfs = HTF[iv] || [];
+    const htfData = [];
+    for (const tf of tfs) { const h = await getHTF(tf); htfData.push(h ? closedOf(h) : null); }
+    const btf = btcTfFor(iv);
+    const btcData = btf ? await getHTF(btf, 'BTCUSDT') : null;
+    return A.backtestPlan(candles, INTERVAL_SEC[iv], tfs.map(tf => INTERVAL_SEC[tf]), {
+      feePct: S.btFee, allowShort: !S.spotOnly, htfData,
+      btcData: btcData ? closedOf(btcData) : null, btcSec: btf ? INTERVAL_SEC[btf] : null, ...o,
+    });
   }
 
   const DIR_TXT = { naik: '▲ Naik', turun: '▼ Turun', neutral: '◆ Neutral', julat: '◆ Berjulat' };
@@ -1541,15 +1575,17 @@
     if (!i) { el.innerHTML = `<div class="empty">${esc(p.reasons[0] || 'Data belum cukup.')}</div>`; return; }
     const dec = S.precision;
     const vCls = p.verdict === 'SETUP' ? 'good' : p.verdict === 'PASANG LIMIT' ? 'info' : 'wait';
-    const vTxt = p.verdict === 'SETUP' ? `✅ SETUP ${p.dir === 'long' ? 'LONG' : 'SHORT'} · Gred ${p.grade}`
-      : p.verdict === 'PASANG LIMIT' ? `⏳ PASANG LIMIT ${p.dir === 'long' ? 'BUY' : 'SELL'} · Gred ${p.grade}`
+    const mTxt = p.mode === 'julat' ? 'JULAT ' : '';
+    const vTxt = p.verdict === 'SETUP' ? `✅ SETUP ${mTxt}${p.dir === 'long' ? 'LONG' : 'SHORT'} · Gred ${p.grade}${p.market ? ' · masuk sekarang' : ''}`
+      : p.verdict === 'PASANG LIMIT' ? `⏳ PASANG LIMIT ${mTxt}${p.dir === 'long' ? 'BUY' : 'SELL'} · Gred ${p.grade}`
+      : p.waitConfirm ? `⏳ TUNGGU PENGESAHAN · ${mTxt}${p.dir === 'long' ? 'LONG' : 'SHORT'} gred ${p.grade}`
       : '⏸ TUNGGU, tiada setup berkualiti';
     let html = `<div class="card ana-verdict ${vCls}"><div class="v">${vTxt}</div>`;
     if (p.reasons.length) html += `<ul class="reasons">${p.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>`;
     html += `<div class="rec"><div class="rec-h">📜 Rekod analisis ni pada sejarah</div><div id="anaRec"><span class="muted">…</span></div></div>`;
     html += `</div>`;
 
-    if (p.entry != null) {
+    if (p.entry != null && p.rr != null) {
       const riskUsd = S.balance * S.riskPct / 100, qty = riskUsd / p.risk;
       html += `<div class="card"><div class="hd"><b>Pelan ${p.dir === 'long' ? 'Long' : 'Short'}</b><span class="muted">${p.zone ? esc(p.zone.name || '') : ''}</span></div>
         <div class="grid"><div>Entry<b>${fmt(p.entry, dec)}</b></div><div>SL<b class="neg">${fmt(p.sl, dec)}</b></div><div>TP1<b class="pos">${fmt(p.tp1, dec)}</b></div><div>TP2<b class="pos">${fmt(p.tp2, dec)}</b></div></div>
@@ -1565,6 +1601,8 @@
     const htfRows = (p.htf || []).map(h => `<span>Trend ${esc(h.tf)}</span><b class="${dirCls(h.info?.dir)}">${h.info ? DIR_TXT[h.info.dir] + ` (${h.info.score > 0 ? '+' : ''}${h.info.score})` : 'tiada data'}</b>`).join('');
     html += `<div class="card"><div class="hd"><b>Keadaan pasaran</b><span class="muted">${esc(S.interval)}</span></div><div class="ana-kv">
       ${htfRows}
+      ${p.btcTf ? `<span>BTC (${esc(p.btcTf)})</span><b class="${dirCls(p.btcDir)}">${p.btcDir ? DIR_TXT[p.btcDir] : 'tiada data'}</b>` : ''}
+      ${p.range ? `<span>Julat</span><b>${fmt(p.range.lo, dec)} – ${fmt(p.range.hi, dec)} · harga di ${Math.round(Math.max(0, Math.min(1, p.range.pos)) * 100)}%</b>` : ''}
       <span>Trend ${esc(S.interval)}</span><b class="${dirCls(i.dir)}">${DIR_TXT[i.dir]} (${i.score > 0 ? '+' : ''}${i.score})</b>
       <span>Struktur</span><b>${esc(i.st.label)}</b>
       ${i.st.bos ? `<span>Break of structure</span><b class="${i.st.bos === 'atas' ? 'pos' : 'neg'}">Tembus swing ${i.st.bos === 'atas' ? 'high ▲' : 'low ▼'}</b>` : ''}
@@ -1596,6 +1634,8 @@
   $('#btnAna').onclick = () => { htfCache.clear(); $('#anaOut').innerHTML = '<div class="empty">Menganalisa…</div>'; runAnalysis(); };
   $('#anaZones').checked = S.anaZones;
   $('#anaZones').onchange = e => { S.anaZones = e.target.checked; persist(); if (S.anaZones) runAnalysis(); else drawings.setZones([]); };
+  $('#anaConfirm').checked = S.anaConfirm;
+  $('#anaConfirm').onchange = e => { S.anaConfirm = e.target.checked; persist(); runAnalysis(); };
 
   // ---- backtest ----
   $('#btStrat').innerHTML =
@@ -1615,29 +1655,72 @@
     return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="0" x2="${w}" y1="${y0}" y2="${y0}" stroke="var(--line)" stroke-dasharray="3 3"/><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
   }
   let btBusy = false;
+  const deepCache = new Map();
+  // Jadual perbandingan cara pelaksanaan. Amaran: memilih "yang terbaik" dari sejarah boleh jadi kebetulan
+  // (overfitting); hanya percaya kalau ia untung pada KEDUA-DUA separuh tempoh dan sampel cukup.
+  function compareCard(list) {
+    const robust = (b) => b.n >= 30 && b.expectancy > 0 && b.firstHalfR > 0 && b.secondHalfR > 0;
+    const best = list.filter(x => robust(x.bt)).sort((a, b) => b.bt.expectancy - a.bt.expectancy)[0];
+    const rows = list.map(x => {
+      const b = x.bt;
+      return `<tr class="${best === x ? 'best' : ''}"><td>${esc(x.name)}</td><td>${b.n}</td><td>${b.winRate.toFixed(0)}%</td><td class="${b.expectancy >= 0 ? 'pos' : 'neg'}">${fmtR(b.expectancy)}</td><td class="neg">-${b.maxDD.toFixed(1)}R</td><td>${robust(b) ? '✓' : '—'}</td></tr>`;
+    }).join('');
+    return `<div class="card"><div class="hd"><b>⚖ Banding cara pelaksanaan</b></div>
+      <table class="cmp"><thead><tr><th>Cara</th><th>Trade</th><th>Menang</th><th>Purata</th><th>DD</th><th>Konsisten</th></tr></thead><tbody>${rows}</tbody></table>
+      <p class="muted" style="margin:6px 0 0">${best
+        ? `Paling konsisten pada data ni: <b>${esc(best.name)}</b>. "Konsisten" = ≥30 trade dan untung pada kedua-dua separuh tempoh. Masih perlu forward test di demo, sebab yang terbaik dalam sejarah selalunya kurang baik pada masa depan.`
+        : 'Tiada cara yang konsisten pada data ni (sampel kecil atau untung cuma pada separuh tempoh). Jangan pilih cara berdasarkan angka paling tinggi sahaja: itu selalunya kebetulan.'}</p></div>`;
+  }
   $('#btnBt').onclick = async () => {
     if (btBusy) return;
     if (S.candles.length < 270) { $('#btOut').innerHTML = '<div class="empty">Perlu sekurang-kurangnya 270 candle.</div>'; return; }
     const strat = $('#btStrat').value;
-    let bt;
-    if (strat.startsWith('plan')) {
-      btBusy = true;
-      const btn = $('#btnBt'), label = btn.textContent;
-      const sym = S.symbol, iv = S.interval, tfs = HTF[iv] || [];
-      try {
-        btn.textContent = 'Memuat data TF besar…';
-        const htfData = [];
-        for (const tf of tfs) htfData.push(await getHTF(tf));
-        bt = await A.backtestPlan(S.candles.slice(), INTERVAL_SEC[iv], tfs.map(tf => INTERVAL_SEC[tf]), {
-          feePct: S.btFee, allowShort: !S.spotOnly, minGrade: strat.split(':')[1], htfData, yieldEvery: 25,
-          onProgress: (f) => { btn.textContent = `Menguji… ${Math.round(f * 100)}%`; },
-          cancelled: () => sym !== S.symbol || iv !== S.interval,
+    const btn = $('#btnBt'), label = btn.textContent;
+    const sym = S.symbol, iv = S.interval;
+    const cancelled = () => sym !== S.symbol || iv !== S.interval;
+    let bt, compare = null;
+    btBusy = true;
+    try {
+      // sejarah panjang: lebih banyak trade = keputusan lebih boleh dipercayai
+      let candles = closedOf(S.candles);
+      if ($('#btDeep').checked && feed && !S.demo && feed.historyDeep) {
+        btn.textContent = 'Memuat sejarah panjang…';
+        const key = `${sym}|${iv}|${feed.id}`;
+        let hit = deepCache.get(key);
+        if (!hit || Date.now() - hit.at > 30 * 60e3) {
+          try {
+            const c = await feed.historyDeep(sym, iv, 3000, (f) => { btn.textContent = `Memuat sejarah panjang… ${Math.round(f * 100)}%`; });
+            hit = { at: Date.now(), c: closedOf(c) }; deepCache.set(key, hit);
+          } catch { hit = null; }
+        }
+        if (cancelled()) return;
+        if (hit && hit.c.length > candles.length) candles = hit.c;
+      }
+      if (strat.startsWith('plan')) {
+        const run = (manage, requireConfirm, tag) => runEngineBacktest(candles, iv, {
+          minGrade: strat.split(':')[1], manage, requireConfirm, yieldEvery: 40, cancelled,
+          onProgress: (f) => { btn.textContent = `Menguji ${tag}… ${Math.round(f * 100)}%`; },
         });
-      } finally { btBusy = false; btn.textContent = label; }
-      if (!bt) return;
-    } else {
-      bt = A.backtest(S.candles, strat, { rr: +$('#btRR').value, slAtr: 1.5, feePct: S.btFee, allowShort: !S.spotOnly });
-    }
+        // empat cara pelaksanaan pada data yang sama: mana satu sesuai dengan pair/TF ni?
+        const combos = [
+          { manage: 'split', confirm: false, name: 'Limit · 50% TP1 + BE' },
+          { manage: 'tp1', confirm: false, name: 'Limit · penuh di TP1' },
+          { manage: 'split', confirm: true, name: 'Pengesahan · 50% TP1 + BE' },
+          { manage: 'tp1', confirm: true, name: 'Pengesahan · penuh di TP1' },
+        ];
+        compare = [];
+        for (const [k, cb] of combos.entries()) {
+          const r = await run(cb.manage, cb.confirm, `${k + 1}/4`);
+          if (!r) return;
+          compare.push({ ...cb, bt: r });
+        }
+        // keputusan utama = tetapan semasa app (setup sebenar guna 50% di TP1 + BE)
+        bt = compare.find(x => x.manage === 'split' && x.confirm === !!S.anaConfirm).bt;
+      } else {
+        bt = A.backtest(candles, strat, { rr: +$('#btRR').value, slAtr: 1.5, feePct: S.btFee, allowShort: !S.spotOnly });
+      }
+    } finally { btBusy = false; btn.textContent = label; }
+    if (!bt) return;
     const j = A.judge(bt);
     const mc = A.monteCarlo(bt.trades.map(t => t.r));
     const days = ((bt.to - bt.from) / 86400).toFixed(0);
@@ -1651,7 +1734,8 @@
         ${cell('Rugi berturut maks', bt.maxLoseStreak)}${cell('Separuh 1', fmtR(bt.firstHalfR), bt.firstHalfR >= 0 ? 'pos' : 'neg')}${cell('Separuh 2', fmtR(bt.secondHalfR), bt.secondHalfR >= 0 ? 'pos' : 'neg')}
       </div>
       ${sparkline(bt.curve)}
-      ${bt.strat === 'plan' ? `<p class="muted">Analisis dijalankan pada ${bt.evals} candle: ${bt.signals} kali bagi isyarat (${(bt.signals / Math.max(1, bt.evals) * 100).toFixed(1)}%), ${bt.missed} terlepas (harga lari tanpa kena entry), ${bt.expired} tamat tempoh. Selebihnya: TUNGGU.</p>` : ''}
+      ${bt.strat === 'plan' ? `<p class="muted">Keputusan di atas: ${bt.requireConfirm ? 'mod pengesahan' : 'order limit'}, 50% di TP1 + SL ke BE (sama macam setup dalam app). Analisis dijalankan pada ${bt.evals} candle: ${bt.signals} kali bagi isyarat (${(bt.signals / Math.max(1, bt.evals) * 100).toFixed(1)}%), ${bt.missed} terlepas, ${bt.expired} tamat tempoh. Selebihnya: TUNGGU.</p>` : ''}
+      ${compare ? compareCard(compare) : ''}
       ${mc ? `<div class="card"><div class="hd"><b>🎲 Monte Carlo (${mc.runs} simulasi)</b></div>
         <p class="muted" style="margin:0 0 6px">Urutan menang/kalah sebenar tak akan sama dengan sejarah. Ni julat yang munasabah untuk ${mc.n} trade seterusnya, pada risiko ${S.riskPct}% setiap trade:</p>
         <div class="ana-kv">
@@ -1667,7 +1751,7 @@
       <p class="muted">${days} hari data ${esc(S.symbol)} ${esc(S.interval)} · ${bt.strat === 'plan' ? 'SL & TP ikut zon analisis' : 'SL 1.5×ATR'} · yuran ${bt.feePct}%/transaksi${S.spotOnly ? ' · long sahaja (akaun spot)' : ''}.
       Pada risiko ${fmtUsd(riskUsd)} setiap trade, keputusan ≈ <b class="${bt.totalR >= 0 ? 'pos' : 'neg'}">${fmtUsd(bt.totalR * riskUsd)}</b>. Beli &amp; simpan dalam tempoh sama: <b class="${bt.buyHoldPct >= 0 ? 'pos' : 'neg'}">${bt.buyHoldPct >= 0 ? '+' : ''}${bt.buyHoldPct.toFixed(1)}%</b>.
       Yuran purata ${bt.avgCost.toFixed(2)}R setiap trade.
-      ${bt.expectancy > 0 ? `Rugi ${bt.maxLoseStreak} kali berturut-turut pun berlaku dalam strategi yang untung: bersedia dari segi mental dan modal.` : ''}</p>`;
+      ${bt.expectancy > 0 && bt.maxLoseStreak >= 2 ? `Rugi ${bt.maxLoseStreak} kali berturut-turut pun berlaku dalam strategi yang untung: bersedia dari segi mental dan modal.` : ''}</p>`;
   };
 
   // ---- imbas watchlist ----
@@ -1697,12 +1781,16 @@
     };
     try {
       const rows = await pool(syms, 2, async (sym) => {
-        const c = await hist(sym, tf);
+        const raw = await hist(sym, tf);
+        const c = raw ? closedOf(raw) : null;
         let r = null;
         if (c && c.length >= 60) {
           const htf = [];
-          for (const t of tfs) { const h = await hist(sym, t); htf.push({ tf: t, info: h && h.length >= 60 ? A.trendInfo(h) : null }); }
-          r = A.plan(c, htf, { spotOnly: S.spotOnly, feePct: S.btFee });
+          for (const t of tfs) { const h = await hist(sym, t); htf.push({ tf: t, info: h && h.length >= 60 ? A.trendInfo(closedOf(h)) : null }); }
+          let btcDir = null;
+          const btf = btcTfFor(tf, sym);
+          if (btf) { const bh = await hist('BTCUSDT', btf); const bi = bh && bh.length >= 60 ? A.trendInfo(closedOf(bh)) : null; btcDir = bi ? bi.dir : null; }
+          r = A.plan(c, htf, { spotOnly: S.spotOnly, feePct: S.btFee, requireConfirm: S.anaConfirm, btcDir, livePx: raw[raw.length - 1].close });
         }
         btn.textContent = `${++done}/${syms.length}`;
         return { sym, r };

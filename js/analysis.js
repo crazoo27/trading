@@ -30,20 +30,26 @@ window.TD = window.TD || {};
   }
 
   // ---------- struktur pasaran ----------
-  function structure(piv, price) {
+  // tol: beza harga yang dianggap "sama paras" (cth 0.25 ATR). Double top / double bottom = julat, bukan LH/LL.
+  function structure(piv, price, tol = 0) {
     const hs = piv.filter(p => p.type === 'H'), ls = piv.filter(p => p.type === 'L');
     if (hs.length < 2 || ls.length < 2) return { trend: 'julat', label: 'Belum cukup swing untuk baca struktur' };
     const h1 = hs[hs.length - 2], h2 = hs[hs.length - 1], l1 = ls[ls.length - 2], l2 = ls[ls.length - 1];
-    const hh = h2.price > h1.price, hl = l2.price > l1.price;
+    const hh = h2.price > h1.price + tol, lh = h2.price < h1.price - tol;
+    const hl = l2.price > l1.price + tol, ll = l2.price < l1.price - tol;
+    const equal = !hh && !lh && !hl && !ll;
     let trend, label;
     if (hh && hl) { trend = 'naik'; label = 'Higher High + Higher Low'; }
-    else if (!hh && !hl) { trend = 'turun'; label = 'Lower High + Lower Low'; }
-    else { trend = 'julat'; label = hh ? 'High makin tinggi tapi low makin rendah (meluas)' : 'High makin rendah tapi low makin tinggi (menyempit)'; }
+    else if (lh && ll) { trend = 'turun'; label = 'Lower High + Lower Low'; }
+    else if (equal) { trend = 'julat'; label = 'High & low sama paras (double top + double bottom): julat'; }
+    else if (hh && ll) { trend = 'julat'; label = 'High makin tinggi tapi low makin rendah (meluas)'; }
+    else if (lh && hl) { trend = 'julat'; label = 'High makin rendah tapi low makin tinggi (menyempit)'; }
+    else { trend = 'julat'; label = (hh ? 'Higher High' : lh ? 'Lower High' : 'High sama paras') + ' + ' + (hl ? 'Higher Low' : ll ? 'Lower Low' : 'low sama paras') + ': belum jelas'; }
     // break of structure: harga dah tembus swing terakhir?
     let bos = null;
     if (price > h2.price) bos = 'atas';
     else if (price < l2.price) bos = 'bawah';
-    return { trend, label, lastH: h2, lastL: l2, bos };
+    return { trend, label, lastH: h2, lastL: l2, bos, equal };
   }
 
   // ---------- zon support / resistance ----------
@@ -95,18 +101,21 @@ window.TD = window.TD || {};
     const e20 = I.ema(cl, 20), e50 = I.ema(cl, 50), e200 = I.ema(cl, 200), r = I.rsi(cl, 14), a = I.atr(c, 14);
     const px = cl[last];
     const piv = pivots(c, 3);
-    const st = structure(piv, px);
+    const st = structure(piv, px, (a[last] || 0) * 0.25); // beza < 0.25 ATR = paras sama
     let score = 0;
     if (e200[last] != null) score += px > e200[last] ? 1 : -1;
     if (e50[last] != null && e200[last] != null) score += e50[last] > e200[last] ? 1 : -1;
     else if (e50[last] != null) score += px > e50[last] ? 1 : -1;
     if (st.trend === 'naik') score++; else if (st.trend === 'turun') score--;
-    const dir = score >= 2 ? 'naik' : score <= -2 ? 'turun' : 'neutral';
     // Efficiency ratio (Kaufman): 1 = bergerak lurus, 0 = berombak ke sana sini
     const k = Math.min(20, last);
     let path = 0;
     for (let i = last - k + 1; i <= last; i++) path += Math.abs(cl[i] - cl[i - 1]);
     const er = path ? Math.abs(cl[last] - cl[last - k]) / path : 0;
+    // Julat dikenal pasti melalui STRUKTUR: swing high & low tak membentuk HH/HL atau LH/LL, dan pergerakan
+    // berombak. Dalam keadaan ni, harga di bawah EMA cuma bermaksud harga di dasar julat, bukan trend turun.
+    const ranging = st.trend === 'julat' && (st.equal || er < 0.3);
+    const dir = ranging ? 'neutral' : score >= 2 ? 'naik' : score <= -2 ? 'turun' : 'neutral';
     let atrAvg = 0, m = 0;
     for (let i = Math.max(0, n - 100); i < n; i++) if (a[i] != null) { atrAvg += a[i]; m++; }
     atrAvg = m ? atrAvg / m : a[last];
@@ -120,29 +129,50 @@ window.TD = window.TD || {};
     };
   }
 
+  // ---------- pengesahan candle (price action) di zon ----------
+  // Dikira pada candle terakhir YANG DAH TUTUP (c mesti candle tertutup sahaja).
+  function confirmation(c, dir, zone, atr, st) {
+    const k = c.length - 1, b = c[k], p = c[k - 1];
+    if (!b || !p || !zone) return null;
+    const range = b.high - b.low || 1e-12, body = Math.abs(b.close - b.open);
+    const found = [];
+    if (dir === 'long') {
+      const near = b.low <= zone.hi + 0.2 * atr;
+      const wick = Math.min(b.open, b.close) - b.low;
+      if (near && wick >= 2 * body && wick >= 0.5 * range && b.close >= b.low + 0.6 * range) found.push('pin bar bullish');
+      if (near && p.close < p.open && b.close > b.open && b.close >= p.open && b.open <= p.close) found.push('bullish engulfing');
+      if (st && st.lastL && b.low < st.lastL.price && b.close > st.lastL.price) found.push('sapu likuiditi bawah swing low');
+    } else {
+      const near = b.high >= zone.lo - 0.2 * atr;
+      const wick = b.high - Math.max(b.open, b.close);
+      if (near && wick >= 2 * body && wick >= 0.5 * range && b.close <= b.high - 0.6 * range) found.push('pin bar bearish');
+      if (near && p.close > p.open && b.close < b.open && b.close <= p.open && b.open >= p.close) found.push('bearish engulfing');
+      if (st && st.lastH && b.high > st.lastH.price && b.close < st.lastH.price) found.push('sapu likuiditi atas swing high');
+    }
+    return found.length ? found : null;
+  }
+
   // ---------- pelan dagangan ----------
-  // htf: [{ tf, info }] untuk timeframe lebih besar (boleh kosong)
+  // c   : candle yang DAH TUTUP sahaja (supaya live & backtest guna peraturan yang sama)
+  // htf : [{ tf, info }] untuk timeframe lebih besar (boleh kosong)
+  // opts: { livePx, feePct, spotOnly, requireConfirm, btcDir }
   function plan(c, htf, opts = {}) {
     const info = trendInfo(c);
-    if (!info) return { verdict: 'TUNGGU', reasons: ['Data belum cukup (perlu sekurang-kurangnya 60 candle).'], checks: [] };
+    if (!info) return { verdict: 'TUNGGU', reasons: ['Data belum cukup (perlu sekurang-kurangnya 60 candle).'], checks: [], extras: [] };
     const z = zones(c, info.piv, info.atr);
     const votes = htf.filter(h => h.info).map(h => h.info.dir);
     const up = votes.filter(d => d === 'naik').length, dn = votes.filter(d => d === 'turun').length;
     const htfBias = !votes.length ? 'neutral' : up > dn && up >= votes.length / 2 ? 'naik' : dn > up && dn >= votes.length / 2 ? 'turun' : 'neutral';
     const bias = htfBias !== 'neutral' ? htfBias : info.dir;
     const conflict = htfBias !== 'neutral' && info.dir !== 'neutral' && htfBias !== info.dir;
-    const res = { info, zones: z, htfBias, bias, conflict, reasons: [], checks: [] };
+    const px = opts.livePx ?? info.px;
+    const res = { info, zones: z, htfBias, bias, conflict, px, reasons: [], checks: [], extras: [], mode: 'trend' };
+    const add = (ok, text) => res.checks.push({ ok: !!ok, text });
 
-    if (bias === 'neutral') {
-      res.verdict = 'TUNGGU';
-      res.reasons.push('Tiada arah jelas: pasaran berjulat atau sedang bertukar. Dalam keadaan ni trader berpengalaman biasanya duduk tepi.');
-      return res;
-    }
-    const L = bias === 'naik';
-    const dirName = L ? 'long' : 'short';
-    res.dir = dirName;
-    const px = info.px, atr = info.atr;
+    if (bias === 'neutral') return rangePlan(res, c, add, opts);
 
+    const L = bias === 'naik', atr = info.atr;
+    res.dir = L ? 'long' : 'short';
     // Zon masuk: zon S/R di belakang harga (support untuk long, resistance untuk short).
     // Kalau tiada, guna EMA50 sebagai "support/resistance dinamik".
     let zone = z.inside[0] || (L ? z.below[0] : z.above[0]);
@@ -150,48 +180,110 @@ window.TD = window.TD || {};
     if (!zone && info.e50 != null) { zone = { lo: info.e50 - atr * 0.3, hi: info.e50 + atr * 0.3, touches: 0, name: 'EMA50' }; dynamic = true; }
     if (!zone) { res.verdict = 'TUNGGU'; res.reasons.push('Tiada zon masuk yang jelas.'); return res; }
     res.zone = zone;
-
-    const entry = L ? Math.min(px, zone.hi) : Math.max(px, zone.lo);
+    res.entry = L ? Math.min(px, zone.hi) : Math.max(px, zone.lo);
     let sl = L ? zone.lo - atr * 0.5 : zone.hi + atr * 0.5;
-    if (Math.abs(entry - sl) < atr * 0.6) sl = L ? entry - atr * 0.6 : entry + atr * 0.6; // SL terlalu rapat mudah kena "noise"
-    const risk = Math.abs(entry - sl);
-    const targets = (L ? z.above : z.below).map(t => L ? t.lo : t.hi).filter(t => L ? t > entry + risk * 0.8 : t < entry - risk * 0.8);
-    const tp1 = targets[0] != null ? targets[0] : (L ? entry + 2 * risk : entry - 2 * risk);
-    const tp2 = targets[1] != null ? targets[1] : (L ? entry + 3 * risk : entry - 3 * risk);
-    const rr = Math.abs(tp1 - entry) / risk;
-    // kos yuran (masuk + keluar) dalam unit R: SL rapat + yuran tinggi = untung dimakan yuran
-    const feeR = opts.feePct ? (opts.feePct / 100) * (entry + tp1) / risk : 0;
-    Object.assign(res, { entry, sl, tp1, tp2, rr, risk, feeR, tpFromZone: targets[0] != null });
+    if (Math.abs(res.entry - sl) < atr * 0.6) sl = L ? res.entry - atr * 0.6 : res.entry + atr * 0.6; // SL terlalu rapat mudah kena "noise"
+    res.sl = sl;
+    const risk0 = Math.abs(res.entry - sl);
+    const targets = (L ? z.above : z.below).map(t => L ? t.lo : t.hi).filter(t => L ? t > res.entry + risk0 * 0.8 : t < res.entry - risk0 * 0.8);
+    res.tp1 = targets[0] != null ? targets[0] : (L ? res.entry + 2 * risk0 : res.entry - 2 * risk0);
+    res.tp2 = targets[1] != null ? targets[1] : (L ? res.entry + 3 * risk0 : res.entry - 3 * risk0);
+    res.tpFromZone = targets[0] != null;
 
-    const htfOk = htfBias === bias;
-    const add = (ok, text) => res.checks.push({ ok: !!ok, text });
-    add(htfOk, htf.length ? `Trend TF besar (${htf.map(h => h.tf).join(', ')}) sama arah` : 'Trend TF besar sama arah (tiada data TF besar)');
+    add(htfBias === bias, htf.length ? `Trend TF besar (${htf.map(h => h.tf).join(', ')}) sama arah` : 'Trend TF besar sama arah (tiada data TF besar)');
     add(info.st.trend === bias, `Struktur TF semasa ${L ? 'naik (HH + HL)' : 'turun (LH + LL)'}`);
     add(!dynamic && zone.touches >= 2, `Entry di zon S/R kukuh (${dynamic ? 'tiada, guna EMA50' : zone.touches + ' sentuhan'})`);
-    add(rr >= 2, `R:R ke TP1 sekurang-kurangnya 1:2 (sekarang 1:${rr.toFixed(2)})`);
     add(L ? info.rsi < 70 : info.rsi > 30, `RSI tak melampau ke arah entry (${info.rsi.toFixed(0)})`);
     add(info.er >= 0.2, `Pasaran bergerak kemas, bukan berombak (ER ${info.er.toFixed(2)})`);
     add(info.volRatio >= 0.6 && info.volRatio <= 1.8, `Volatiliti normal (ATR ${info.volRatio.toFixed(2)}× purata)`);
+    if (conflict) res.reasons.push(`TF besar ${htfBias} tapi TF semasa ${info.dir}. Bila bercanggah, peluang menang jatuh.`);
+    return finalize(res, c, opts);
+  }
+
+  // ---------- setup julat (pasaran mendatar): beli di bawah julat, jual di atas ----------
+  function rangePlan(res, c, add, opts) {
+    const { info, zones: z, px } = res, atr = info.atr;
+    res.mode = 'julat';
+    let sup = z.below[0], resi = z.above[0];
+    const ins = z.inside[0];
+    if (ins) { // harga dalam satu zon: zon tu jadi sempadan di sebelah yang lebih jauh dari zon bertentangan
+      const dUp = resi ? resi.lo - ins.hi : -1, dDn = sup ? ins.lo - sup.hi : -1;
+      if (dUp >= dDn) sup = { ...ins, kind: 'S', name: 'Bawah julat' }; else resi = { ...ins, kind: 'R', name: 'Atas julat' };
+    }
+    if (!sup || !resi) { res.verdict = 'TUNGGU'; res.reasons.push('Tiada arah jelas dan tiada julat yang jelas. Trader berpengalaman duduk tepi dalam keadaan ni.'); return res; }
+    const lo = sup.hi, hi = resi.lo, width = hi - lo;
+    if (width < 3 * atr) { res.verdict = 'TUNGGU'; res.reasons.push(`Pasaran berjulat tapi julat terlalu sempit (${(width / atr).toFixed(1)} ATR). Tiada ruang untung selepas yuran.`); return res; }
+    const pos = (px - lo) / width; // 0 = dasar julat, 1 = bumbung julat
+    res.range = { lo: sup.lo, hi: resi.hi, pos };
+    if (pos > 0.33 && pos < 0.67) {
+      res.verdict = 'TUNGGU';
+      res.reasons.push(`Pasaran berjulat, tapi harga di tengah julat (${Math.round(pos * 100)}%). Tunggu harga sampai hujung julat: beli dekat ${sup.hi.toPrecision(6)}, jual dekat ${resi.lo.toPrecision(6)}.`);
+      return res;
+    }
+    const L = pos <= 0.33;
+    res.dir = L ? 'long' : 'short';
+    res.bias = L ? 'naik' : 'turun';
+    const zone = L ? sup : resi;
+    res.zone = zone;
+    res.entry = L ? Math.min(px, zone.hi) : Math.max(px, zone.lo);
+    res.sl = L ? zone.lo - atr * 0.5 : zone.hi + atr * 0.5;
+    if (Math.abs(res.entry - res.sl) < atr * 0.6) res.sl = L ? res.entry - atr * 0.6 : res.entry + atr * 0.6;
+    res.tp1 = L ? resi.lo - 0.2 * atr : sup.hi + 0.2 * atr; // ambil untung sebelum sempadan bertentangan
+    res.tp2 = L ? resi.hi : sup.lo;
+    res.tpFromZone = true;
+    add(info.st.equal || info.er < 0.3, info.st.equal ? 'Julat jelas: high & low terakhir sama paras' : `Pasaran berombak, bukan bertrend (ER ${info.er.toFixed(2)})`);
+    add(sup.touches >= 2 && resi.touches >= 2, `Dasar & bumbung julat kukuh (${sup.touches}× dan ${resi.touches}× sentuhan)`);
+    add(L ? pos <= 0.2 : pos >= 0.8, `Harga betul-betul di hujung julat (${Math.round(pos * 100)}%)`);
+    add(L ? info.rsi < 45 : info.rsi > 55, `RSI menyokong lantunan (${info.rsi.toFixed(0)})`);
+    add(!info.st.bos, 'Tiada break of structure baru (julat masih utuh)');
+    add(info.volRatio >= 0.6 && info.volRatio <= 1.8, `Volatiliti normal (ATR ${info.volRatio.toFixed(2)}× purata)`);
+    return finalize(res, c, opts);
+  }
+
+  // ---------- langkah akhir yang sama untuk setup trend & julat ----------
+  function finalize(res, c, opts) {
+    const { info } = res, L = res.dir === 'long', atr = info.atr;
+    // pengesahan candle: kalau mod pengesahan, masuk pada harga semasa selepas candle penolakan tutup
+    const conf = confirmation(c, res.dir, res.zone, atr, info.st);
+    res.confirm = conf;
+    if (opts.requireConfirm && conf) { res.entry = res.px; res.market = true; }
+    res.risk = L ? res.entry - res.sl : res.sl - res.entry;
+    if (!(res.risk > 0)) { res.verdict = 'TUNGGU'; res.reasons.push('Harga dah melepasi stop loss pelan ni. Setup terbatal.'); return res; }
+    res.rr = Math.abs(res.tp1 - res.entry) / res.risk;
+    if (L ? res.tp1 <= res.entry : res.tp1 >= res.entry) { res.verdict = 'TUNGGU'; res.reasons.push('Harga dah sampai sasaran. Terlambat untuk masuk.'); return res; }
+    // kos yuran (masuk + keluar) dalam unit R: SL rapat + yuran tinggi = untung dimakan yuran
+    res.feeR = opts.feePct ? (opts.feePct / 100) * (res.entry + res.tp1) / res.risk : 0;
+    res.checks.splice(3, 0, { ok: res.rr >= 2, text: `R:R ke TP1 sekurang-kurangnya 1:2 (sekarang 1:${res.rr.toFixed(2)})` });
+
     let pass = res.checks.filter(x => x.ok).length;
-    // faktor tambahan: divergence menolak/menambah satu mata; volume sebagai maklumat
-    res.extras = [];
     const div = info.div || {};
     if (L ? div.bull : div.bear) { res.extras.push({ ok: true, text: `Divergence RSI ${L ? 'bullish' : 'bearish'}: momentum menyokong arah ni (+1)` }); pass++; }
     if (L ? div.bear : div.bull) { res.extras.push({ ok: false, text: `Divergence RSI ${L ? 'bearish' : 'bullish'} melawan arah: momentum melemah (−1)` }); pass--; }
+    if (conf) { res.extras.push({ ok: true, text: `Pengesahan candle: ${conf.join(', ')} (+1)` }); pass++; }
+    if (opts.btcDir && opts.btcDir !== 'neutral') {
+      const against = L ? opts.btcDir === 'turun' : opts.btcDir === 'naik';
+      if (against) { res.extras.push({ ok: false, text: `BTC sedang ${opts.btcDir}: kebanyakan altcoin ikut arah BTC (−1)` }); pass--; }
+      else res.extras.push({ ok: true, info: true, text: `BTC sedang ${opts.btcDir}, sehaluan dengan setup ni` });
+    }
     if (info.relVol != null) res.extras.push({ ok: info.relVol >= 1, info: true, text: `Volume candle terakhir ${info.relVol.toFixed(1)}× purata${info.relVol >= 1.5 ? ': penyertaan kuat' : info.relVol < 0.7 ? ': lemah, pergerakan kurang disokong' : ''}` });
     pass = Math.max(0, Math.min(7, pass));
     res.score = pass;
     res.grade = pass >= 6 ? 'A' : pass >= 4 ? 'B' : 'C';
 
-    if (conflict) res.reasons.push(`TF besar ${htfBias} tapi TF semasa ${info.dir}. Bila bercanggah, peluang menang jatuh.`);
-    if (rr < 1.5) res.reasons.push(`R:R cuma 1:${rr.toFixed(2)}: resistance/support seterusnya terlalu dekat. Untung tak berbaloi dengan risiko.`);
+    if (res.rr < 1.5) res.reasons.push(`R:R cuma 1:${res.rr.toFixed(2)}: ${res.mode === 'julat' ? 'julat' : 'zon seterusnya'} terlalu dekat. Untung tak berbaloi dengan risiko.`);
     if (res.grade === 'C') res.reasons.push(`Cuma ${pass}/7 faktor selari. Terlalu sedikit untuk ambil risiko.`);
-    if (!L && opts.spotOnly) res.reasons.push('Bias turun, tapi akaun spot tak boleh short. Duduk tepi atau tunggu trend berubah.');
-    if (feeR > 0.25) res.reasons.push(`Yuran ${opts.feePct}% makan ${feeR.toFixed(2)}R untuk SL serapat ni. Guna timeframe lebih besar (SL lebih jauh) supaya yuran jadi kecil.`);
+    if (!L && opts.spotOnly) res.reasons.push(res.mode === 'julat' ? 'Harga di bumbung julat (peluang jual), tapi akaun spot tak boleh short.' : 'Bias turun, tapi akaun spot tak boleh short. Duduk tepi atau tunggu trend berubah.');
+    if (res.feeR > 0.25) res.reasons.push(`Yuran ${opts.feePct}% makan ${res.feeR.toFixed(2)}R untuk SL serapat ni. Guna timeframe lebih besar (SL lebih jauh) supaya yuran jadi kecil.`);
 
-    const dist = Math.abs(px - entry) / atr;
+    const dist = Math.abs(res.px - res.entry) / atr;
     if (res.reasons.length) res.verdict = 'TUNGGU';
-    else if (dist > 0.5) { res.verdict = 'PASANG LIMIT'; res.reasons.push(`Harga sekarang ${dist.toFixed(1)} ATR dari zon masuk. Jangan kejar: pasang order limit di entry dan biar harga datang.`); }
+    else if (opts.requireConfirm && !conf) {
+      res.verdict = 'TUNGGU'; res.waitConfirm = true;
+      res.reasons.push(dist > 0.5
+        ? `Setup ${res.grade} terbentuk, tapi harga ${dist.toFixed(1)} ATR dari zon. Tunggu harga sampai zon DAN candle penolakan tutup.`
+        : 'Harga di zon. Tunggu candle penolakan (pin bar / engulfing / sapu likuiditi) TUTUP dulu sebelum masuk.');
+    }
+    else if (!res.market && dist > 0.5) { res.verdict = 'PASANG LIMIT'; res.reasons.push(`Harga sekarang ${dist.toFixed(1)} ATR dari zon masuk. Jangan kejar: pasang order limit di entry dan biar harga datang.`); }
     else res.verdict = 'SETUP';
     return res;
   }
@@ -293,51 +385,75 @@ window.TD = window.TD || {};
   // Pada setiap candle tanpa posisi, jalankan plan() hanya dengan data yang wujud SETAKAT candle tu
   // (TF besar pun hanya candle yang dah tutup). Kalau keputusan SETUP / PASANG LIMIT dengan gred cukup,
   // pasang order limit di entry; tamat tempoh selepas `expiry` candle, batal kalau harga sampai TP dulu.
-  // Keluar di SL atau TP1. SL dikira dulu kalau kedua-dua kena dalam candle sama. Yuran ditolak.
+  // Pengurusan (o.manage):
+  //   'split' (default, sama macam setup dalam app): 50% keluar di TP1, SL dialih ke entry, baki di TP2 / breakeven
+  //   'tp1'   : keluar penuh di TP1
+  // o.requireConfirm: masuk hanya selepas candle penolakan tutup, pada harga BUKA candle seterusnya.
+  // o.btcData + o.btcSec: candle BTC (TF besar) untuk penapis BTC, dikira dengan peraturan "dah tutup" yang sama.
+  // SL dikira dulu kalau SL & TP kena dalam candle sama. Yuran ditolak pada setiap transaksi.
   async function backtestPlan(c, curSec, htfSecs, o = {}) {
     const fee = (o.feePct ?? 0.1) / 100, minGrade = o.minGrade || 'B', allowShort = o.allowShort !== false;
+    const split = (o.manage || 'split') === 'split';
     const WIN = 600, EXP = o.expiry || 12, n = c.length, start = Math.min(n, 260);
     const gradeOk = (g) => g === 'A' || (minGrade === 'B' && g === 'B');
-    const aggs = htfSecs.map((sec, j) => {
-      const given = o.htfData && o.htfData[j];
-      return { sec, agg: given && given.length >= 60 ? given : aggregate(c, sec), k: -1, info: null };
-    });
+    const mkSeries = (sec, given) => ({ sec, agg: given && given.length >= 60 ? given : aggregate(c, sec), k: -1, info: null });
+    const aggs = htfSecs.map((sec, j) => mkSeries(sec, o.htfData && o.htfData[j]));
+    const btc = o.btcData && o.btcData.length >= 60 ? { sec: o.btcSec, agg: o.btcData, k: -1, info: null } : null;
+    // maklumat trend siri `h` setakat candle yang dah tutup sebelum masa tClose
+    const closedInfo = (h, tClose) => {
+      let k = h.k;
+      while (k + 1 < h.agg.length && h.agg[k + 1].time + h.sec <= tClose) k++;
+      if (k !== h.k) { h.k = k; h.info = k >= 59 ? trendInfo(h.agg.slice(Math.max(0, k - WIN + 1), k + 1)) : null; }
+      return h.info;
+    };
     const trades = [];
     let pos = null, pend = null, evals = 0, signals = 0, missed = 0, expired = 0;
+    const R = (px) => (pos.dir === 'long' ? px - pos.entry : pos.entry - px) / pos.risk;
     const close = (exit, i, why) => {
-      const gross = (pos.dir === 'long' ? exit - pos.entry : pos.entry - exit) / pos.risk;
-      const cost = fee * (pos.entry + exit) / pos.risk;
-      trades.push({ dir: pos.dir, grade: pos.grade, entryTime: pos.time, exitTime: c[i].time, entry: pos.entry, exit, r: gross - cost, cost, why });
+      const half = pos.half;
+      const gross = half ? 0.5 * pos.r1 + 0.5 * R(exit) : R(exit);
+      const cost = fee * (pos.entry + (half ? 0.5 * pos.tp + 0.5 * exit : exit)) / pos.risk;
+      trades.push({ dir: pos.dir, grade: pos.grade, mode: pos.mode, confirm: pos.confirm, entryTime: pos.time, exitTime: c[i].time,
+        entry: pos.entry, exit, r: gross - cost, cost, why: half && why === 'sl' ? 'be' : why });
       pos = null;
+    };
+    const open = (entry, i) => {
+      const L = pend.dir === 'long';
+      const risk = L ? entry - pend.sl : pend.sl - entry;
+      // harga buka dah melepasi SL atau TP: batal
+      if (!(risk > 0) || (L ? entry >= pend.tp : entry <= pend.tp)) { missed++; pend = null; return; }
+      pos = { ...pend, entry, risk, time: c[i].time, half: false }; pend = null;
     };
     for (let i = start; i < n; i++) {
       const b = c[i];
-      if (pos) {
-        const hitSL = pos.dir === 'long' ? b.low <= pos.sl : b.high >= pos.sl;
-        const hitTP = pos.dir === 'long' ? b.high >= pos.tp : b.low <= pos.tp;
-        if (hitSL) close(pos.sl, i, 'sl'); else if (hitTP) close(pos.tp, i, 'tp');
-      } else if (pend) {
+      let limitFill = false;
+      if (!pos && pend) {
         const L = pend.dir === 'long';
-        if (L ? b.low <= pend.entry : b.high >= pend.entry) {
-          pos = { ...pend, time: b.time }; pend = null;
-          if (L ? b.low <= pos.sl : b.high >= pos.sl) close(pos.sl, i, 'sl'); // masuk & kena SL dalam candle sama
-        } else if (L ? b.high >= pend.tp : b.low <= pend.tp) { missed++; pend = null; }
+        if (pend.market) open(b.open, i);
+        else if (L ? b.low <= pend.entry : b.high >= pend.entry) { open(pend.entry, i); limitFill = true; }
+        else if (L ? b.high >= pend.tp : b.low <= pend.tp) { missed++; pend = null; }
         else if (i - pend.at >= EXP) { expired++; pend = null; }
+      }
+      if (pos) {
+        const L = pos.dir === 'long';
+        if (L ? b.low <= pos.sl : b.high >= pos.sl) close(pos.sl, i, 'sl');
+        // limit terisi dalam candle ni: tak tahu sama ada TP berlaku sebelum atau selepas isian, jadi TP tak dikira (pesimis)
+        else if (limitFill) { /* tunggu candle seterusnya */ }
+        else if (!pos.half && (L ? b.high >= pos.tp : b.low <= pos.tp)) {
+          if (split && pos.tp2 != null) { pos.half = true; pos.r1 = R(pos.tp); pos.sl = pos.entry; }
+          else close(pos.tp, i, 'tp');
+        } else if (pos.half && (L ? b.high >= pos.tp2 : b.low <= pos.tp2)) close(pos.tp2, i, 'tp2');
       }
       if (!pos && !pend && i < n - 1) {
         evals++;
         const tClose = b.time + curSec;
-        const htf = [];
-        for (const h of aggs) {
-          let k = h.k;
-          while (k + 1 < h.agg.length && h.agg[k + 1].time + h.sec <= tClose) k++;
-          if (k !== h.k) { h.k = k; h.info = k >= 59 ? trendInfo(h.agg.slice(Math.max(0, k - WIN + 1), k + 1)) : null; }
-          htf.push({ tf: String(h.sec), info: h.info });
-        }
-        const p = plan(c.slice(Math.max(0, i - WIN + 1), i + 1), htf, { spotOnly: !allowShort, feePct: fee * 100 });
+        const htf = aggs.map(h => ({ tf: String(h.sec), info: closedInfo(h, tClose) }));
+        const btcInfo = btc ? closedInfo(btc, tClose) : null;
+        const p = plan(c.slice(Math.max(0, i - WIN + 1), i + 1), htf,
+          { spotOnly: !allowShort, feePct: fee * 100, requireConfirm: o.requireConfirm, btcDir: btcInfo ? btcInfo.dir : null });
         if (p.verdict !== 'TUNGGU' && gradeOk(p.grade)) {
           signals++;
-          pend = { dir: p.dir, entry: p.entry, sl: p.sl, tp: p.tp1, risk: p.risk, at: i, grade: p.grade };
+          pend = { dir: p.dir, entry: p.entry, sl: p.sl, tp: p.tp1, tp2: p.tp2, at: i, grade: p.grade, mode: p.mode, confirm: !!p.confirm, market: !!p.market };
         }
       }
       if (o.yieldEvery && i % o.yieldEvery === 0) {
@@ -346,8 +462,14 @@ window.TD = window.TD || {};
         if (o.cancelled && o.cancelled()) return null;
       }
     }
-    return { trades, ...stats(trades), open: pos || pend ? 1 : 0, evals, signals, missed, expired,
-      from: c[start]?.time, to: c[n - 1]?.time, feePct: fee * 100, strat: 'plan', minGrade,
+    // prestasi ikut kumpulan (gred & jenis setup): jawab "bila analisis cakap gred A, berapa kerap ia betul?"
+    const groups = {};
+    for (const [key, f] of [['A', t => t.grade === 'A'], ['B', t => t.grade === 'B'], ['trend', t => t.mode === 'trend'], ['julat', t => t.mode === 'julat']]) {
+      const g = stats(trades.filter(f));
+      groups[key] = { n: g.n, winRate: g.winRate, expectancy: g.expectancy, totalR: g.totalR };
+    }
+    return { trades, ...stats(trades), groups, open: pos || pend ? 1 : 0, evals, signals, missed, expired,
+      from: c[start]?.time, to: c[n - 1]?.time, feePct: fee * 100, strat: 'plan', minGrade, manage: split ? 'split' : 'tp1', requireConfirm: !!o.requireConfirm,
       buyHoldPct: n > start ? (c[n - 1].close / c[start].close - 1) * 100 : 0 };
   }
 
@@ -385,5 +507,5 @@ window.TD = window.TD || {};
     return { level: 'good', text: `Ada tanda edge: untung pada kedua-dua separuh tempoh, profit factor ${bt.profitFactor.toFixed(2)}. Langkah seterusnya: forward test di akaun demo sekurang-kurangnya 30 trade sebelum duit sebenar.` };
   }
 
-  TD.ana = { pivots, structure, zones, divergence, trendInfo, plan, aggregate, backtest, backtestPlan, monteCarlo, stats, judge, STRATS };
+  TD.ana = { pivots, structure, zones, divergence, confirmation, trendInfo, plan, aggregate, backtest, backtestPlan, monteCarlo, stats, judge, STRATS };
 })();

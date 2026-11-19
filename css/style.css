@@ -251,6 +251,11 @@ textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 
 .scan-row { cursor: pointer; }
 .scan-row:hover { border-color: var(--blue); }
 .note.neg { color: var(--down); }
+.cmp { width: 100%; border-collapse: collapse; font-size: 12px; font-variant-numeric: tabular-nums; }
+.cmp th { color: var(--muted); font-weight: 500; text-align: right; padding: 4px 3px; border-bottom: 1px solid var(--line); }
+.cmp td { text-align: right; padding: 5px 3px; border-bottom: 1px solid var(--bg3); }
+.cmp th:first-child, .cmp td:first-child { text-align: left; }
+.cmp tr.best td { background: rgba(8,153,129,.12); }
 
 /* ---------- bottom bar ---------- */
 .bottombar { height: 30px; display: flex; align-items: center; gap: 4px; padding: 0 10px; background: var(--bg2); border-top: 4px solid var(--bg); font-variant-numeric: tabular-nums; }

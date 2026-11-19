@@ -66,6 +66,19 @@ window.TD = window.TD || {};
       const raw = await this.get(`/api/v3/klines?symbol=${sym}&interval=${iv}&limit=${Math.min(1000, (o.pages || 4) * 300)}`);
       return raw.map(k => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] }));
     },
+    // sejarah lebih panjang: halaman 1000 candle ke belakang guna endTime (berturut-turut, mesra had kadar)
+    async historyDeep(sym, iv, bars, onProg) {
+      let rows = await this.history(sym, iv);
+      while (rows.length < bars) {
+        const end = rows[0].time * 1000 - 1;
+        const raw = await this.get(`/api/v3/klines?symbol=${sym}&interval=${iv}&limit=1000&endTime=${end}`);
+        const more = raw.map(k => ({ time: Math.floor(k[0] / 1000), open: +k[1], high: +k[2], low: +k[3], close: +k[4], volume: +k[5] })).filter(x => x.time < rows[0].time);
+        if (!more.length) break;
+        rows = more.concat(rows);
+        onProg && onProg(Math.min(1, rows.length / bars));
+      }
+      return rows.slice(-bars);
+    },
     async symbols() {
       return (await this.get('/api/v3/ticker/price')).map(x => ({ s: x.symbol, p: +x.price })).filter(x => x.p > 0);
     },
@@ -112,6 +125,22 @@ window.TD = window.TD || {};
       for (const d of pages) for (const r of d) byTime.set(r[0], r);
       if (!byTime.size) throw notFound();
       return [...byTime.values()].map(okxRow).sort((a, b) => a.time - b.time);
+    },
+    // sejarah lebih panjang: endpoint history-candles (100 candle setiap halaman), berturut-turut dengan jeda kecil
+    async historyDeep(sym, iv, bars, onProg) {
+      const inst = okxInst(sym), bar = OKX_BAR[iv];
+      let rows = await this.history(sym, iv);
+      for (let guard = 0; rows.length < bars && guard < 60; guard++) {
+        let d;
+        try { d = await this.get(`/api/v5/market/history-candles?instId=${inst}&bar=${bar}&limit=100&after=${rows[0].time * 1000}`); }
+        catch { break; }
+        const more = d.map(okxRow).filter(x => x.time < rows[0].time).sort((a, b) => a.time - b.time);
+        if (!more.length) break;
+        rows = more.concat(rows);
+        onProg && onProg(Math.min(1, rows.length / bars));
+        await new Promise(r => setTimeout(r, 120)); // had kadar OKX
+      }
+      return rows.slice(-bars);
     },
     async symbols() {
       return (await this.get('/api/v5/market/tickers?instType=SPOT')).map(x => ({ s: okxSym(x.instId), p: +x.last })).filter(x => x.p > 0);

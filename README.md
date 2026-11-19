@@ -57,6 +57,13 @@ Analisis berasaskan peraturan, ikut cara trader berpengalaman berfikir. **Bukan 
 - **Backtest "🧠 Analisis TradeDesk"** (gred A & B, atau A sahaja) di samping 4 strategi mudah
 - **Monte Carlo** (2000 simulasi): julat drawdown biasa & teruk dalam % modal, rugi berturut-turut, peluang akhirnya rugi
 - **Imbas watchlist**: analisis penuh pada semua pair (1h/4h/1d), disusun dari setup terbaik; tekan untuk buka
+- **Setup julat**: bila pasaran mendatar (high & low sama paras), beli di dasar / jual di bumbung julat; tengah julat = TUNGGU
+- **Struktur bertoleransi**: high/low yang beza < 0.25 ATR dikira sama paras (double top/bottom = julat, bukan LH/LL)
+- **Mod pengesahan** (pilihan): masuk hanya selepas candle penolakan tutup di zon: pin bar, engulfing, atau sapu likuiditi (tembus swing kemudian tutup balik)
+- **Penapis BTC** untuk altcoin: setup melawan arah BTC (TF besar) ditolak 1 mata
+- **Live = backtest**: analisis live guna candle yang dah tutup sahaja, dengan harga semasa untuk jarak entry
+- **Rekod sejarah ikut gred & jenis setup**, dan padanan "bila gred ni keluar sebelum ni, berapa kerap menang"
+- **Backtest sejarah panjang** (≈3000 candle, OKX/Binance) dan **perbandingan 4 cara pelaksanaan** (limit vs pengesahan × 50% TP1+BE vs penuh di TP1), dengan amaran overfitting
 
 ## Prestasi
 
