@@ -449,7 +449,7 @@ window.TD = window.TD || {};
       const half = pos.half;
       const gross = half ? 0.5 * pos.r1 + 0.5 * R(exit) : R(exit);
       const cost = fee * (pos.entry + (half ? 0.5 * pos.tp + 0.5 * exit : exit)) / pos.risk;
-      trades.push({ dir: pos.dir, grade: pos.grade, mode: pos.mode, confirm: pos.confirm, er: pos.er, vr: pos.vr, entryTime: pos.time, exitTime: c[i].time,
+      trades.push({ dir: pos.dir, grade: pos.grade, mode: pos.mode, confirm: pos.confirm, er: pos.er, vr: pos.vr, sigTime: pos.sigTime, entryTime: pos.time, exitTime: c[i].time,
         entry: pos.entry, exit, r: gross - cost, cost, why: half && why === 'sl' ? (pos.trailed ? 'trail' : 'be') : why });
       pos = null;
     };
@@ -493,7 +493,7 @@ window.TD = window.TD || {};
       if (!pos && !pend && i < to && i < n - 1) {
         evals++;
         const s = pre.sigs[i];
-        if (s && gradeOk(s.grade)) { signals++; pend = { ...s, at: i }; }
+        if (s && gradeOk(s.grade)) { signals++; pend = { ...s, at: i, sigTime: c[i].time }; }
       }
       if (!pos && !pend && i >= to) break;
     }

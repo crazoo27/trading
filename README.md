@@ -63,6 +63,7 @@ Analisis berasaskan peraturan, ikut cara trader berpengalaman berfikir. **Bukan 
 - **Penapis BTC** untuk altcoin: setup melawan arah BTC (TF besar) ditolak 1 mata
 - **Live = backtest**: analisis live guna candle yang dah tutup sahaja, dengan harga semasa untuk jarak entry
 - **Rekod sejarah ikut gred & jenis setup**, dan padanan "bila gred ni keluar sebelum ni, berapa kerap menang"
+- **Ujian ke hadapan (forward test) automatik**: tekan Mula, dan tetapan (termasuk tetapan ditala setiap pair, yuran, akaun spot) dibekukan. Setiap kali dikira, cuma trade yang isyaratnya diputuskan SELEPAS tarikh mula dikira, jadi tiada data lama dan tiada ubah tetapan selepas nampak keputusan. Dikira dari sejarah harga, jadi berjalan walaupun app ditutup. Sasaran 30 trade, dengan julat keyakinan dan perbandingan dengan backtest
 - **Julat keyakinan 95%** (bootstrap untuk purata R, Wilson untuk win rate) pada backtest, rekod sejarah dan ujian watchlist. "Edge" cuma diiktiraf bila seluruh julat purata R di atas sifar
 - **Uji seluruh watchlist**: enjin analisis pada semua pair sekali gus (sampel 5–7× lebih besar), dengan jadual ikut pair dan lengkung ekuiti gabungan
 - **Prestasi ikut keadaan pasaran** semasa masuk (kekuatan trend × volatiliti), dan padanan dengan keadaan pasaran SEKARANG dalam rekod sejarah

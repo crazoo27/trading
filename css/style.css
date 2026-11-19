@@ -256,6 +256,8 @@ textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 
 .cmp td { text-align: right; padding: 5px 3px; border-bottom: 1px solid var(--bg3); }
 .cmp th:first-child, .cmp td:first-child { text-align: left; }
 .cmp tr.best td { background: rgba(8,153,129,.12); }
+.ftbar { height: 6px; background: var(--bg3); border-radius: 3px; margin-top: 8px; overflow: hidden; }
+.ftbar i { display: block; height: 100%; background: var(--accent); }
 
 /* ---------- bottom bar ---------- */
 .bottombar { height: 30px; display: flex; align-items: center; gap: 4px; padding: 0 10px; background: var(--bg2); border-top: 4px solid var(--bg); font-variant-numeric: tabular-nums; }

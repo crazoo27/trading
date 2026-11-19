@@ -62,6 +62,8 @@
     anaZones: saved.anaZones ?? true,
     anaConfirm: saved.anaConfirm ?? false,
     tuned: saved.tuned || {}, // tetapan walk-forward yang diterima, ikut 'PAIR|TF'
+    ft: saved.ft || null,         // ujian ke hadapan: { start, tf, pairs, fee, spotOnly, opts }
+    ftLast: saved.ftLast || null, // ringkasan kiraan terakhir
     source: saved.source || null,
     magnet: saved.magnet ?? false,
     hideDrawings: false,
@@ -86,7 +88,7 @@
   const persistNow = () => { clearTimeout(persistTimer); persistTimer = null; store.save(snapshotState()); };
   const snapshotState = () => ({
     symbol: S.symbol, interval: S.interval, chartType: S.chartType, watch: S.watch, indicators: S.indicators, drawings: S.drawings,
-    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen, dailyR: S.dailyR, btFee: S.btFee, anaZones: S.anaZones, anaConfirm: S.anaConfirm, tuned: S.tuned,
+    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen, dailyR: S.dailyR, btFee: S.btFee, anaZones: S.anaZones, anaConfirm: S.anaConfirm, tuned: S.tuned, ft: S.ft, ftLast: S.ftLast,
     magnet: S.magnet, priceMode: S.priceMode, sideTab: S.sideTab, sideCollapsed: S.sideCollapsed,
     setups: S.setups, alerts: S.alerts, log: S.log.slice(0, 100),
   });
@@ -1173,7 +1175,11 @@
     $$('#rail button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.sideTab && !S.sideCollapsed));
     $$('.tab-body').forEach(b => b.classList.toggle('hidden', b.dataset.body !== S.sideTab));
     renderUi();
-    if (S.sideTab === 'ana' && !S.sideCollapsed && typeof scheduleAnalysis === 'function') scheduleAnalysis();
+    if (S.sideTab === 'ana' && !S.sideCollapsed && typeof scheduleAnalysis === 'function') {
+      scheduleAnalysis();
+      // kira semula ujian ke hadapan sekali-sekala (bila dah lebih satu candle sejak kiraan terakhir)
+      if (S.ft && !S.demo && feed && (!S.ftLast || Date.now() - S.ftLast.at > INTERVAL_SEC[S.ft.tf] * 1000)) setTimeout(() => computeFt(), 1500);
+    }
     persist();
   }
 
@@ -1926,6 +1932,90 @@
       renderOpt(lastOpt.res, lastOpt.key, { length: '…' });
     }
   });
+
+  // ---- ujian ke hadapan (forward test) ----
+  // Tetapan (termasuk tetapan ditala setiap pair, yuran, akaun spot) DIBEKUKAN pada hari mula. Setiap kali dikira,
+  // enjin yang sama dijalankan atas sejarah harga, tapi cuma trade yang ISYARATNYA diputuskan selepas tarikh mula
+  // dikira. Jadi tiada data "lama" dan tiada ubah tetapan selepas nampak keputusan.
+  let ftBusy = false;
+  const dFmt = (t) => new Date(t).toLocaleDateString('ms-MY', { day: 'numeric', month: 'short', year: 'numeric' });
+  function renderFt() {
+    const el = $('#ftOut'); if (!el) return;
+    if (!S.ft) {
+      el.innerHTML = `<div class="row"><select id="ftTf" class="sel"><option value="1h">1h</option><option value="4h" selected>4h</option><option value="1d">1d</option></select>
+        <button class="btn primary" id="btnFtStart">▶ Mula ujian ke hadapan</button></div>
+        <p class="muted" style="margin:0">Akan rekod ${S.watch.length} pair dalam watchlist. Sasaran: sekurang-kurangnya 30 trade sebelum buat keputusan.</p>`;
+      return;
+    }
+    const ft = S.ft, L = S.ftLast, days = ((Date.now() - ft.start) / 864e5);
+    let body = `<div class="muted">Bermula ${dFmt(ft.start)} (${days < 1 ? 'hari ni' : Math.floor(days) + ' hari lepas'}) · ${esc(ft.tf)} · ${ft.pairs.length} pair · yuran ${ft.fee}% · tetapan dibekukan</div>`;
+    if (L) {
+      const pct = Math.min(100, L.n / 30 * 100);
+      const lvl = L.n < 30 ? 'info' : L.judge.level === 'good' ? 'good' : L.judge.level === 'bad' ? 'bad' : 'wait';
+      body += `<div class="card ana-verdict ${lvl}"><div class="v">${L.n < 30 ? `⏳ Sedang berjalan: ${L.n}/30 trade` : (L.judge.level === 'good' ? '✅ ' : L.judge.level === 'bad' ? '❌ ' : '⚠ ') + esc(L.judge.text)}</div>
+        <div class="ftbar"><i style="width:${pct}%"></i></div></div>
+        <div class="stats">
+          <div class="stat"><b>${L.n}</b><span>Trade baru</span></div>
+          <div class="stat"><b>${L.n ? L.winRate.toFixed(0) + '%' : '—'}</b><span>Win rate</span></div>
+          <div class="stat"><b class="${L.expectancy >= 0 ? 'pos' : 'neg'}">${L.n ? fmtR(L.expectancy) : '—'}</b><span>Purata / trade</span></div>
+          <div class="stat"><b class="${L.totalR >= 0 ? 'pos' : 'neg'}">${L.n ? fmtR(L.totalR) : '—'}</b><span>Jumlah</span></div>
+          <div class="stat"><b class="neg">${L.n ? '-' + L.maxDD.toFixed(1) + 'R' : '—'}</b><span>Drawdown</span></div>
+          <div class="stat"><b>${L.openNow}</b><span>Masih terbuka</span></div>
+        </div>
+        ${L.ci ? `<div class="muted">Julat keyakinan 95% purata: ${fmtR(L.ci.expLo)} hingga ${fmtR(L.ci.expHi)}</div>` : ''}
+        ${L.backExp != null ? `<div class="muted">Banding backtest sebelum tarikh mula: ${fmtR(L.backExp)} setiap trade. ${L.n >= 10 ? (L.expectancy < L.backExp * 0.5 ? 'Prestasi sebenar jauh lebih rendah dari backtest: biasa, tapi berhati-hati.' : 'Prestasi sebenar setanding backtest.') : ''}</div>` : ''}
+        <div class="ana-kv">${L.pairs.map(p => `<span>${esc(splitSym(p.sym)[0])}</span><b class="${p.totalR >= 0 ? 'pos' : 'neg'}">${p.n} trade · ${p.n ? fmtR(p.totalR) : '—'}</b>`).join('')}</div>
+        <div class="muted">Dikira ${new Date(L.at).toLocaleString('ms-MY', { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })}</div>`;
+    } else body += '<div class="muted">Belum dikira. Tekan 🔄 untuk kira.</div>';
+    body += `<div class="row"><button class="btn" id="btnFtCalc">🔄 Kira semula</button><button class="btn ghost" id="btnFtStop">⏹ Tamatkan</button></div>`;
+    el.innerHTML = body;
+  }
+  async function computeFt() {
+    if (ftBusy || !S.ft) return;
+    if (S.demo || !feed) { toast('Perlukan data live', 'Ujian ke hadapan tak boleh dikira dalam mod demo.', 'bad'); return; }
+    ftBusy = true;
+    const ft = S.ft, f = feed, sec = INTERVAL_SEC[ft.tf], btn = $('#btnFtCalc');
+    const startSec = Math.floor(ft.start / 1000);
+    const all = [], pairs = [], back = [];
+    let openNow = 0;
+    try {
+      for (const [k, sym] of ft.pairs.entries()) {
+        if (btn) btn.textContent = `${k + 1}/${ft.pairs.length} · ${splitSym(sym)[0]}…`;
+        // cukup candle untuk tempoh ujian + "panas" penunjuk sebelum tarikh mula
+        const need = Math.ceil((Date.now() / 1000 - startSec) / sec) + 700;
+        let c = null;
+        try { c = need > 1150 && f.historyDeep ? await f.historyDeep(sym, ft.tf, Math.min(3000, need)) : await f.history(sym, ft.tf); } catch { c = null; }
+        if (!c || c.length < 300) { pairs.push({ sym, n: 0, totalR: 0 }); continue; }
+        const bt = await runEngineBacktest(closedOf(c), ft.tf, { ...(ft.opts[sym] || { manage: 'split', minGrade: 'B' }), feePct: ft.fee, allowShort: !ft.spotOnly, yieldEvery: 100 }, sym);
+        // isyarat yang diputuskan bila candle TUTUP selepas tarikh mula
+        const fwd = bt.trades.filter(t => t.sigTime + sec >= startSec);
+        back.push(...bt.trades.filter(t => t.sigTime + sec < startSec));
+        if (bt.open && c[c.length - 1].time >= startSec) openNow++;
+        all.push(...fwd);
+        pairs.push({ sym, n: fwd.length, totalR: fwd.reduce((a, t) => a + t.r, 0) });
+      }
+    } finally { ftBusy = false; }
+    all.sort((a, b) => a.exitTime - b.exitTime);
+    const s = A.stats(all);
+    const ci = A.confidence(all);
+    const judge = A.judge({ ...s, trades: all, ci, avgCost: all.length ? all.reduce((a, t) => a + (t.cost || 0), 0) / all.length : 0 });
+    const bs = back.length >= 10 ? A.stats(back) : null;
+    S.ftLast = { at: Date.now(), n: s.n, winRate: s.winRate, expectancy: s.expectancy, totalR: s.totalR, maxDD: s.maxDD, ci, judge, openNow, pairs, backExp: bs ? bs.expectancy : null };
+    persist(); renderFt();
+  }
+  $('#ftOut').addEventListener('click', e => {
+    if (e.target.closest('#btnFtStart')) {
+      const tf = $('#ftTf').value;
+      const opts = {};
+      for (const sym of S.watch) opts[sym] = engineOpts(sym, tf);
+      S.ft = { start: Date.now(), tf, pairs: [...S.watch], fee: S.btFee, spotOnly: S.spotOnly, opts };
+      S.ftLast = null; persist(); renderFt();
+      toast('Ujian ke hadapan bermula', `${S.watch.length} pair · ${tf}. Tetapan dibekukan hari ni. Buka semula dalam beberapa hari dan tekan 🔄.`, 'good');
+    }
+    if (e.target.closest('#btnFtCalc')) computeFt();
+    if (e.target.closest('#btnFtStop') && confirm('Tamatkan ujian ke hadapan? Rekod akan dipadam.')) { S.ft = null; S.ftLast = null; persist(); renderFt(); }
+  });
+  renderFt();
 
   // ---- uji seluruh watchlist (portfolio): sampel besar = keputusan lebih boleh dipercayai ----
   let portBusy = false;

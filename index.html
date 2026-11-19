@@ -13,9 +13,9 @@
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <title>TradeDesk</title>
   <link rel="preconnect" href="https://www.okx.com" crossorigin>
-  <link rel="stylesheet" href="css/style.css?v=11">
+  <link rel="stylesheet" href="css/style.css?v=12">
   <!-- Mula minta data candle SEKARANG, sementara skrip chart yang besar masih dimuat turun dan diproses. -->
-  <script src="js/feeds.js?v=11"></script>
+  <script src="js/feeds.js?v=12"></script>
   <script>
     try {
       var st = JSON.parse(localStorage.getItem('tradedesk.v2') || '{}');
@@ -160,6 +160,10 @@
           <label class="check"><input type="checkbox" id="anaConfirm"> Mod pengesahan: masuk hanya selepas candle penolakan (pin bar / engulfing / sapu likuiditi) tutup di zon</label>
           <div id="anaOut" class="list"><div class="empty">Menganalisa…</div></div>
 
+          <h4>🧪 Ujian ke hadapan (forward test)</h4>
+          <p class="muted" style="margin:0">Bukti paling kuat sebelum guna duit sebenar: rekod isyarat analisis pada data BARU mulai hari ni, dengan tetapan dibekukan. Jalan walaupun app ditutup (dikira semula dari sejarah harga).</p>
+          <div id="ftOut" class="list"></div>
+
           <h4>Imbas watchlist: cari setup terbaik</h4>
           <p class="muted" style="margin:0">Jalankan analisis yang sama pada semua pair dalam watchlist. Trader berpengalaman pilih peluang terbaik, bukan paksa satu pair.</p>
           <div class="row"><select id="scanTf" class="sel"><option value="1h">1h</option><option value="4h" selected>4h</option><option value="1d">1d</option></select><button class="btn" id="btnScan">🔎 Imbas</button></div>
@@ -261,9 +265,9 @@
   <div id="toasts" class="toasts"></div>
 
   <script src="lib/lightweight-charts.standalone.production.js?v=5.3.0"></script>
-  <script src="js/indicators.js?v=11"></script>
-  <script src="js/analysis.js?v=11"></script>
-  <script src="js/drawings.js?v=11"></script>
-  <script src="js/app.js?v=11"></script>
+  <script src="js/indicators.js?v=12"></script>
+  <script src="js/analysis.js?v=12"></script>
+  <script src="js/drawings.js?v=12"></script>
+  <script src="js/app.js?v=12"></script>
 </body>
 </html>
