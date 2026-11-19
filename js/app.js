@@ -975,8 +975,14 @@
     if (S.dailyR > 0 && tr <= -S.dailyR) {
       if (!confirm(`Hari ni kau dah rugi ${tr.toFixed(2)}R (had harian ${S.dailyR}R).\n\nTrader berpengalaman berhenti bila sampai had. Selepas beberapa kali rugi, keputusan biasanya dipengaruhi emosi.\n\nTetap nak simpan setup ni?`)) return;
     }
-    const openNow = S.setups.filter(isOpen).length;
-    if (openNow >= 3) toast('Banyak posisi serentak', `Dah ada ${openNow} setup dipantau. Kalau semua kena SL serentak, rugi ${openNow + 1}R sekali gus. Pertimbang kurangkan.`, 'bad');
+    // Pengawal pendedahan: pair crypto bergerak hampir serentak, jadi beberapa setup sama arah ≈ satu pertaruhan besar
+    const exp = openRisk();
+    const sameDir = S.setups.filter(x => isOpen(x) && x.dir === d.dir && x.symbol !== S.symbol && riskLeft(x) > 0);
+    if (sameDir.length >= 2) {
+      toast('Pendedahan berganda', `Dah ada ${sameDir.length} setup ${d.dir.toUpperCase()} lain (${sameDir.map(x => splitSym(x.symbol)[0]).join(', ')}). Crypto biasanya bergerak serentak: kalau pasaran berpatah, semua boleh kena SL sekali gus (≈${(exp[d.dir] + 1).toFixed(1)}R). Pertimbang risiko lebih kecil untuk setup ni.`, 'bad');
+    } else if (exp.long + exp.short >= 3) {
+      toast('Banyak posisi serentak', `Risiko terbuka dah ${(exp.long + exp.short).toFixed(1)}R. Kalau semua kena SL serentak, rugi ${(exp.long + exp.short + 1).toFixed(1)}R sekali gus. Pertimbang kurangkan.`, 'bad');
+    }
     const px = priceOf(S.symbol);
     const s = {
       id: uid(), symbol: S.symbol, interval: S.interval, dir: d.dir, entry, sl: d.sl, origSl: d.sl, tp1: d.tp1, tp2: d.tp2,
@@ -1101,11 +1107,27 @@
       ${!closed ? `<div class="acts">${s.status === 'active' ? `<button class="btn small" data-act="close">Tutup sekarang</button>` : ''}<button class="btn small ghost" data-act="cancel">${s.status === 'active' ? 'Buang' : 'Batal'}</button></div>` : ''}
     </div>`;
   }
+  // risiko yang masih terdedah bagi satu setup, dalam R (0 bila SL dah di breakeven atau lebih baik)
+  function riskLeft(s) {
+    if (!isOpen(s)) return 0;
+    const lockedR = s.dir === 'long' ? (s.sl - s.entry) / riskPerUnit(s) : (s.entry - s.sl) / riskPerUnit(s);
+    return Math.max(0, Math.min(1, -lockedR)) * (s.tp1Hit && (s.tp2 || s.trail) ? 0.5 : 1);
+  }
+  function openRisk() {
+    const e = { long: 0, short: 0 };
+    for (const s of S.setups) if (isOpen(s)) e[s.dir] += riskLeft(s);
+    return e;
+  }
   function renderOpen() {
     const open = S.setups.filter(isOpen);
     $('#openCount').textContent = open.length;
     $('#openCount').classList.toggle('hidden', !open.length);
-    $('#openList').innerHTML = open.length ? open.map(s => setupCard(s, false)).join('') : '<div class="empty">Tiada setup dipantau.<br>Buat satu di tab Setup, atau guna tool Long/Short position.</div>';
+    const e = openRisk(), tot = e.long + e.short;
+    const head = open.length ? `<div class="card"><div class="ana-kv">
+        <span>Risiko terbuka</span><b class="${tot >= 3 ? 'neg' : ''}">${tot.toFixed(1)}R ≈ ${fmtUsd(tot * S.balance * S.riskPct / 100)}</b>
+        <span>Long / Short</span><b>${e.long.toFixed(1)}R / ${e.short.toFixed(1)}R</b></div>
+        ${Math.max(e.long, e.short) >= 2 ? `<div class="note neg">${e.long >= e.short ? 'Long' : 'Short'} ${Math.max(e.long, e.short).toFixed(1)}R pada beberapa pair: crypto bergerak hampir serentak, jadi ni lebih kurang SATU pertaruhan besar pada arah pasaran.</div>` : ''}</div>` : '';
+    $('#openList').innerHTML = open.length ? head + open.map(s => setupCard(s, false)).join('') : '<div class="empty">Tiada setup dipantau.<br>Buat satu di tab Setup, atau guna tool Long/Short position.</div>';
     renderOpenLive();
   }
   function renderOpenLive() {
@@ -1567,7 +1589,12 @@
       recCache.set(cKey, hit);
     }
     if (run !== anaRun || !el()) return;
-    const bt = hit.bt, j = A.judge(bt);
+    const bt = hit.bt;
+    bt.ci = bt.ci || A.confidence(bt.trades);
+    const j = A.judge(bt);
+    // keadaan pasaran SEKARANG: bagaimana analisis ni berprestasi dalam keadaan yang sama sebelum ni?
+    const nowNames = lastPlan && lastPlan.info ? A.regimeNow(lastPlan.info) : [];
+    const nowRg = A.regimeStats(bt.trades).filter(x => nowNames.includes(x.name) && x.n);
     const days = Math.round((bt.to - bt.from) / 86400);
     const g = bt.groups;
     const grp = (name, x) => x.n ? `<span>${name}</span><b class="${x.expectancy > 0 ? 'pos' : 'neg'}">${x.n} trade · ${x.winRate.toFixed(0)}% · ${fmtR(x.expectancy)}</b>` : '';
@@ -1577,17 +1604,19 @@
       ? `<b class="${bt.expectancy > 0 ? 'pos' : 'neg'}">${bt.n} setup lepas: win rate ${bt.winRate.toFixed(0)}%, purata ${fmtR(bt.expectancy)} setiap trade</b>
          <span class="muted"> dalam ${days} hari (${esc(S.symbol)} ${esc(S.interval)}, yuran ${bt.feePct}%, ${esc(engineLabel())}).</span>
          ${cur && cur.n ? `<div class="rec-j ${cur.expectancy > 0 ? 'good' : 'bad'}">Setup sekarang gred ${lastPlan.grade}: sebelum ni gred ${lastPlan.grade} pada pair ni ${cur.n} kali, menang ${cur.winRate.toFixed(0)}%, purata ${fmtR(cur.expectancy)}.</div>` : ''}
+         ${bt.ci ? `<div class="muted" style="margin-top:4px">Julat keyakinan 95% purata: ${fmtR(bt.ci.expLo)} hingga ${fmtR(bt.ci.expHi)} · win rate ${bt.ci.winLo.toFixed(0)}–${bt.ci.winHi.toFixed(0)}%</div>` : ''}
+         ${nowRg.length ? `<div class="rec-j ${nowRg.every(x => x.expectancy > 0) ? 'good' : 'warn'}">Keadaan pasaran sekarang: ${nowRg.map(x => `${esc(x.name)}: ${x.n} trade, purata ${fmtR(x.expectancy)}`).join(' · ')}</div>` : ''}
          <div class="ana-kv">${grp('Gred A', g.A)}${grp('Gred B', g.B)}${grp('Setup trend', g.trend)}${grp('Setup julat', g.julat)}</div>
          <div class="rec-j ${j.level}">${esc(j.text)}</div>`
       : `<span class="muted">Tiada setup gred A/B dalam ${days} hari sejarah ni. Analisis ni sangat memilih pada pair/TF ni.</span>`;
   }
 
   // Jalankan backtest enjin analisis dengan data TF besar & BTC yang sama seperti analisis live
-  async function runEngineBacktest(candles, iv, o) {
+  async function runEngineBacktest(candles, iv, o, sym = S.symbol) {
     const tfs = HTF[iv] || [];
     const htfData = [];
-    for (const tf of tfs) { const h = await getHTF(tf); htfData.push(h ? closedOf(h) : null); }
-    const btf = btcTfFor(iv);
+    for (const tf of tfs) { const h = await getHTF(tf, sym); htfData.push(h ? closedOf(h) : null); }
+    const btf = btcTfFor(iv, sym);
     const btcData = btf ? await getHTF(btf, 'BTCUSDT') : null;
     return A.backtestPlan(candles, INTERVAL_SEC[iv], tfs.map(tf => INTERVAL_SEC[tf]), {
       feePct: S.btFee, allowShort: !S.spotOnly, htfData,
@@ -1683,6 +1712,27 @@
     const col = curve[curve.length - 1] >= 0 ? 'var(--up)' : 'var(--down)';
     return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><line x1="0" x2="${w}" y1="${y0}" y2="${y0}" stroke="var(--line)" stroke-dasharray="3 3"/><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="2" vector-effect="non-scaling-stroke"/></svg>`;
   }
+  // kad julat keyakinan 95%: "untung ni nyata, atau nasib?"
+  function ciCard(ci, n) {
+    if (!ci) return '';
+    const proven = ci.expLo > 0, disproven = ci.expHi < 0;
+    return `<div class="card"><div class="hd"><b>📐 Julat keyakinan 95%</b><span class="muted">${n} trade</span></div>
+      <div class="ana-kv">
+        <span>Purata R sebenar kemungkinan</span><b class="${proven ? 'pos' : disproven ? 'neg' : ''}">${fmtR(ci.expLo)} hingga ${fmtR(ci.expHi)}</b>
+        <span>Win rate sebenar kemungkinan</span><b>${ci.winLo.toFixed(0)}% – ${ci.winHi.toFixed(0)}%</b>
+        <span>Peluang purata sebenar > 0</span><b class="${ci.pPositive >= 0.95 ? 'pos' : ci.pPositive < 0.5 ? 'neg' : ''}">${(ci.pPositive * 100).toFixed(0)}%</b>
+      </div>
+      <p class="muted" style="margin:6px 0 0">${proven ? 'Seluruh julat di atas sifar: untung ni kecil kemungkinannya kebetulan.' : disproven ? 'Seluruh julat di bawah sifar: strategi ni rugi, bukan nasib malang.' : 'Julat merangkumi untung DAN rugi: belum boleh bezakan edge sebenar dengan nasib. Perlu lebih banyak trade.'}</p></div>`;
+  }
+  // kad prestasi ikut keadaan pasaran semasa masuk
+  function regimeCard(trades) {
+    const rg = A.regimeStats(trades);
+    if (!rg.some(x => x.n)) return '';
+    const row = (x) => `<tr><td>${esc(x.name)}</td><td>${x.n}</td><td>${x.n ? x.winRate.toFixed(0) + '%' : '—'}</td><td class="${x.expectancy >= 0 ? 'pos' : 'neg'}">${x.n ? fmtR(x.expectancy) : '—'}</td></tr>`;
+    return `<div class="card"><div class="hd"><b>🌦 Ikut keadaan pasaran semasa masuk</b></div>
+      <table class="cmp"><thead><tr><th>Keadaan</th><th>Trade</th><th>Menang</th><th>Purata</th></tr></thead><tbody>${rg.map(row).join('')}</tbody></table>
+      <p class="muted" style="margin:6px 0 0">Kumpulan dengan purata negatif = keadaan yang patut dielak. Kumpulan dengan bawah 10 trade belum boleh dipercayai.</p></div>`;
+  }
   let btBusy = false;
   const deepCache = new Map();
   // Jadual perbandingan cara pelaksanaan. Amaran: memilih "yang terbaik" dari sejarah boleh jadi kebetulan
@@ -1750,6 +1800,7 @@
       }
     } finally { btBusy = false; btn.textContent = label; }
     if (!bt) return;
+    bt.ci = A.confidence(bt.trades);
     const j = A.judge(bt);
     const mc = A.monteCarlo(bt.trades.map(t => t.r));
     const days = ((bt.to - bt.from) / 86400).toFixed(0);
@@ -1763,6 +1814,8 @@
         ${cell('Rugi berturut maks', bt.maxLoseStreak)}${cell('Separuh 1', fmtR(bt.firstHalfR), bt.firstHalfR >= 0 ? 'pos' : 'neg')}${cell('Separuh 2', fmtR(bt.secondHalfR), bt.secondHalfR >= 0 ? 'pos' : 'neg')}
       </div>
       ${sparkline(bt.curve)}
+      ${ciCard(bt.ci, bt.n)}
+      ${bt.strat === 'plan' ? regimeCard(bt.trades) : ''}
       ${bt.strat === 'plan' ? `<p class="muted">Keputusan di atas: ${bt.requireConfirm ? 'mod pengesahan' : 'order limit'}, 50% di TP1 + SL ke BE (sama macam setup dalam app). Analisis dijalankan pada ${bt.evals} candle: ${bt.signals} kali bagi isyarat (${(bt.signals / Math.max(1, bt.evals) * 100).toFixed(1)}%), ${bt.missed} terlepas, ${bt.expired} tamat tempoh. Selebihnya: TUNGGU.</p>` : ''}
       ${compare ? compareCard(compare) : ''}
       ${mc ? `<div class="card"><div class="hd"><b>🎲 Monte Carlo (${mc.runs} simulasi)</b></div>
@@ -1830,25 +1883,28 @@
   const paramTxt = (r) => `${r.requireConfirm ? 'Pengesahan' : 'Limit'} · SL +${r.slBuf} ATR · R:R ≥${r.minRR} · ${MANAGE_TXT[r.manage]} · gred ${r.minGrade === 'A' ? 'A' : 'A&B'}`;
   function renderOpt(res, key, candles) {
     const d = (t) => new Date(t * 1000).toLocaleDateString('ms-MY', { day: 'numeric', month: 'short', year: '2-digit' });
-    const { best, def } = res;
+    const { best, wf, dflt } = res;
+    const ci = wf.ci;
+    const ciTxt = ci ? ` Julat keyakinan 95%: ${fmtR(ci.expLo)} hingga ${fmtR(ci.expHi)}${ci.expLo > 0 ? ' (di atas sifar ✓)' : ' (masih merangkumi rugi)'}.` : '';
     const v = res.verdict === 'accept'
-      ? { cls: 'good', t: `✅ Tetapan baru BERTAHAN pada data yang tak pernah dilihat: purata ${fmtR(best.oos.expectancy)} setiap trade (${best.oos.n} trade), berbanding tetapan asal ${def && def.oos.n ? fmtR(def.oos.expectancy) : 'tiada trade'}.` }
+      ? { cls: 'good', t: `✅ Proses pengoptimuman BERTAHAN pada data yang tak pernah dilihat: ${wf.n} trade ujian, purata ${fmtR(wf.expectancy)}, untung pada ${res.foldsPositive}/3 lipatan, berbanding tetapan asal ${dflt.n ? fmtR(dflt.expectancy) : 'tiada trade'}.${ciTxt}` }
       : res.verdict === 'reject'
-        ? { cls: 'wait', t: `⚠ Tetapan "terbaik" dalam sejarah GAGAL pada data baru (${best.oos.n} trade, purata ${fmtR(best.oos.expectancy)}). Ini overfitting: angka cantik dalam sejarah, tapi tak bertahan. Kekalkan tetapan asal.` }
-        : { cls: 'bad', t: '❌ Tiada tetapan yang untung secara konsisten pada 70% sejarah awal (perlu ≥15 trade dan untung pada kedua-dua separuh). Analisis ni belum terbukti untuk pair/TF ni: jangan trade dengan duit sebenar.' };
-    const row = (name, r) => r ? `<tr><td>${name}</td><td>${r.is.n}</td><td class="${r.is.expectancy >= 0 ? 'pos' : 'neg'}">${fmtR(r.is.expectancy)}</td><td>${r.oos.n}</td><td class="${r.oos.expectancy >= 0 ? 'pos' : 'neg'}">${r.oos.n ? fmtR(r.oos.expectancy) : '—'}</td><td>${r.oos.n ? r.oos.winRate.toFixed(0) + '%' : '—'}</td></tr>` : '';
-    const top = res.top.map((r, k) => `<div class="zrow"><b>#${k + 1}</b><span>${esc(paramTxt(r))}</span><span class="${r.oos.expectancy >= 0 ? 'pos' : 'neg'}">${r.oos.n ? fmtR(r.oos.expectancy) : '—'}</span></div>`).join('');
+        ? { cls: 'wait', t: `⚠ Tetapan yang dipilih dari sejarah GAGAL pada data baru (${wf.n} trade ujian, purata ${wf.n ? fmtR(wf.expectancy) : '—'}, untung pada ${res.foldsPositive}/3 lipatan). Ini overfitting: kekalkan tetapan asal.` }
+        : { cls: 'bad', t: '❌ Tiada tetapan yang untung secara konsisten dalam data latihan (perlu ≥12 trade dan untung pada kedua-dua separuh). Analisis ni belum terbukti untuk pair/TF ni: jangan trade dengan duit sebenar.' };
+    const cell = (s) => s && s.n ? `<td>${s.n}</td><td class="${s.expectancy >= 0 ? 'pos' : 'neg'}">${fmtR(s.expectancy)}</td>` : '<td>0</td><td>—</td>';
+    const foldRows = res.folds.map((f, k) => `<tr><td>${k + 1}. ${d(f.from)}–${d(f.to)}</td>${cell(f.test)}${cell(f.def)}<td>${f.pick ? (f.pick === best ? '★' : '') + esc(f.pick.manage) : '—'}</td></tr>`).join('');
+    const top = res.top.map((r, k) => `<div class="zrow"><b>#${k + 1}</b><span>${esc(paramTxt(r))}</span><span></span></div>`).join('');
     const tuned = S.tuned[key];
     $('#optOut').innerHTML = `
       <div class="card ana-verdict ${v.cls}"><div class="v">${esc(v.t)}</div></div>
-      <div class="card"><div class="hd"><b>Asal lawan terbaik</b><span class="muted">${res.tested} kombinasi diuji</span></div>
-        <table class="cmp"><thead><tr><th>Tetapan</th><th>Trade 70%</th><th>Purata</th><th>Trade 30%</th><th>Purata</th><th>Menang</th></tr></thead>
-        <tbody>${row('Asal', def)}${row('Terbaik', best)}</tbody></table>
-        ${best ? `<p class="muted" style="margin:6px 0 0">Terbaik: ${esc(paramTxt(best))}</p>` : ''}
-        <p class="muted" style="margin:4px 0 0">70% awal: ${d(res.isFrom)} – ${d(res.cutTime)} · 30% terakhir (ujian sebenar): ${d(res.cutTime)} – ${d(res.oosTo)} · ${candles.length} candle.</p>
+      <div class="card"><div class="hd"><b>Walk-forward 3 lipatan</b><span class="muted">${res.tested} kombinasi</span></div>
+        <table class="cmp"><thead><tr><th>Ujian (tak pernah dilihat)</th><th>Trade</th><th>Ditala</th><th>Trade</th><th>Asal</th><th>Pilih</th></tr></thead>
+        <tbody>${foldRows}<tr class="best"><td>Gabungan</td>${cell(wf)}${cell(dflt)}<td></td></tr></tbody></table>
+        <p class="muted" style="margin:6px 0 0">Setiap lipatan pilih tetapan HANYA dari data sebelum tempoh ujiannya. Gabungan tiga tempoh ujian = prestasi sebenar proses ni pada data baru. ${candles.length} candle, ${d(res.isFrom)} – ${d(res.oosTo)}.</p>
+        ${best ? `<p class="muted" style="margin:4px 0 0">Cadangan untuk masa depan (dilatih dengan data paling baru): <b>${esc(paramTxt(best))}</b></p>` : ''}
       </div>
-      ${top ? `<div class="card"><div class="hd"><b>5 calon teratas (ikut 70% awal)</b><span class="muted">purata pada 30%</span></div>${top}
-        <p class="muted" style="margin:6px 0 0">Kalau calon teratas berbeza-beza teruk pada 30% terakhir, maknanya keputusan ni rapuh.</p></div>` : ''}
+      ${top ? `<div class="card"><div class="hd"><b>5 calon teratas (data latihan terkini)</b></div>${top}
+        <p class="muted" style="margin:6px 0 0">Kalau calon teratas sangat berbeza antara satu sama lain, maknanya tiada tetapan yang jelas lebih baik: keputusan ni rapuh.</p></div>` : ''}
       <div class="row">
         ${res.verdict === 'accept' ? `<button class="btn primary" id="btnApplyOpt">Guna tetapan ni untuk ${esc(key.replace('|', ' '))}</button>` : ''}
         ${tuned ? '<button class="btn" id="btnResetOpt">Kembali ke tetapan asal</button>' : ''}
@@ -1859,7 +1915,7 @@
   $('#optOut').addEventListener('click', e => {
     if (e.target.closest('#btnApplyOpt') && lastOpt && lastOpt.res.best) {
       const b = lastOpt.res.best;
-      S.tuned[lastOpt.key] = { slBuf: b.slBuf, minRR: b.minRR, requireConfirm: b.requireConfirm, manage: b.manage, minGrade: b.minGrade, at: Date.now(), oosExp: b.oos.expectancy, oosN: b.oos.n };
+      S.tuned[lastOpt.key] = { slBuf: b.slBuf, minRR: b.minRR, requireConfirm: b.requireConfirm, manage: b.manage, minGrade: b.minGrade, at: Date.now(), oosExp: lastOpt.res.wf.expectancy, oosN: lastOpt.res.wf.n };
       persist(); recCache.clear(); runAnalysis();
       toast('Tetapan ditala diguna', `${lastOpt.key.replace('|', ' ')}: ${paramTxt(b)}`, 'good');
       renderOpt(lastOpt.res, lastOpt.key, { length: '…' });
@@ -1870,6 +1926,59 @@
       renderOpt(lastOpt.res, lastOpt.key, { length: '…' });
     }
   });
+
+  // ---- uji seluruh watchlist (portfolio): sampel besar = keputusan lebih boleh dipercayai ----
+  let portBusy = false;
+  $('#btnPort').onclick = async () => {
+    if (portBusy) return;
+    if (S.demo || !feed) { $('#portOut').innerHTML = '<div class="empty">Perlukan data live (bukan mod demo).</div>'; return; }
+    portBusy = true;
+    const tf = $('#scanTf').value, syms = [...S.watch], f = feed, btn = $('#btnPort'), label = btn.textContent;
+    const deep = $('#btDeep').checked && f.historyDeep;
+    const per = [];
+    try {
+      for (const [k, sym] of syms.entries()) {
+        btn.textContent = `${k + 1}/${syms.length} · ${splitSym(sym)[0]}: memuat…`;
+        let c = null;
+        try { c = deep ? await f.historyDeep(sym, tf, 3000) : await f.history(sym, tf); } catch { c = null; }
+        if (!c || c.length < 400) { per.push({ sym, err: 'data tak cukup' }); continue; }
+        const bt = await runEngineBacktest(closedOf(c), tf, { ...engineOpts(sym, tf), yieldEvery: 80,
+          onProgress: (x) => { btn.textContent = `${k + 1}/${syms.length} · ${splitSym(sym)[0]}: menguji ${Math.round(x * 100)}%`; } }, sym);
+        per.push({ sym, bt, days: Math.round((c[c.length - 1].time - c[0].time) / 86400) });
+      }
+    } finally { portBusy = false; btn.textContent = label; }
+    renderPortfolio(per, tf);
+  };
+  function renderPortfolio(per, tf) {
+    // gabung semua trade ikut masa keluar → lengkung ekuiti portfolio
+    const all = per.flatMap(p => p.bt ? p.bt.trades.map(t => ({ ...t, sym: p.sym })) : []).sort((a, b) => a.exitTime - b.exitTime);
+    const s = { ...A.stats(all), trades: all, avgCost: all.length ? all.reduce((a, t) => a + (t.cost || 0), 0) / all.length : 0 };
+    s.ci = A.confidence(all);
+    const j = A.judge(s);
+    const rows = per.map(p => {
+      if (!p.bt) return `<tr><td>${esc(splitSym(p.sym)[0])}</td><td colspan="4" class="muted">${esc(p.err)}</td></tr>`;
+      const b = p.bt;
+      return `<tr><td>${esc(splitSym(p.sym)[0])}${tunedFor(p.sym, tf) ? ' ⚙' : ''}</td><td>${b.n}</td><td>${b.n ? b.winRate.toFixed(0) + '%' : '—'}</td><td class="${b.expectancy >= 0 ? 'pos' : 'neg'}">${b.n ? fmtR(b.expectancy) : '—'}</td><td class="${b.totalR >= 0 ? 'pos' : 'neg'}">${b.n ? fmtR(b.totalR) : '—'}</td></tr>`;
+    }).join('');
+    const pairsPos = per.filter(p => p.bt && p.bt.n && p.bt.totalR > 0).length, pairsTested = per.filter(p => p.bt && p.bt.n).length;
+    $('#portOut').innerHTML = `
+      <div class="card ana-verdict ${j.level === 'good' ? 'good' : j.level === 'bad' ? 'bad' : 'wait'}"><div class="v">${j.level === 'good' ? '✅' : j.level === 'bad' ? '❌' : '⚠'} Seluruh watchlist ${esc(tf)}: ${esc(j.text)}</div></div>
+      <div class="stats">
+        <div class="stat"><b>${s.n}</b><span>Trade (semua pair)</span></div>
+        <div class="stat"><b>${s.winRate.toFixed(0)}%</b><span>Win rate</span></div>
+        <div class="stat"><b class="${s.expectancy >= 0 ? 'pos' : 'neg'}">${fmtR(s.expectancy)}</b><span>Purata / trade</span></div>
+        <div class="stat"><b class="${s.totalR >= 0 ? 'pos' : 'neg'}">${fmtR(s.totalR)}</b><span>Jumlah</span></div>
+        <div class="stat"><b class="neg">-${s.maxDD.toFixed(1)}R</b><span>Drawdown maks</span></div>
+        <div class="stat"><b>${pairsPos}/${pairsTested}</b><span>Pair untung</span></div>
+      </div>
+      ${sparkline(s.curve)}
+      ${ciCard(s.ci, s.n)}
+      <div class="card"><div class="hd"><b>Ikut pair</b><span class="muted">⚙ = tetapan ditala</span></div>
+        <table class="cmp"><thead><tr><th>Pair</th><th>Trade</th><th>Menang</th><th>Purata</th><th>Jumlah</th></tr></thead><tbody>${rows}</tbody></table>
+        <p class="muted" style="margin:6px 0 0">${pairsTested && pairsPos / pairsTested >= 0.6 ? 'Untung pada kebanyakan pair: tanda analisis ni menangkap sesuatu yang umum, bukan kebetulan satu pair.' : 'Untung cuma pada sebahagian kecil pair: berhati-hati, pair yang untung mungkin cuma bernasib baik.'}</p></div>
+      ${regimeCard(all)}
+      <p class="muted">Nota: trade dari pair berbeza boleh bertindih masa. Dalam akaun sebenar, beberapa posisi serentak pada crypto ≈ satu pertaruhan besar (lihat pengawal pendedahan di tab Pantau).</p>`;
+  }
 
   // ---- imbas watchlist ----
   // Ambil 300 candle sahaja setiap pair/TF (cukup untuk EMA200 + struktur) dan hadkan permintaan serentak

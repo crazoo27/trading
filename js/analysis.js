@@ -422,7 +422,7 @@ window.TD = window.TD || {};
         slBuf: o.slBuf, minRR: o.minRR,
       });
       if (p.verdict !== 'TUNGGU' && (p.grade === 'A' || p.grade === 'B')) {
-        sigs[i] = { dir: p.dir, entry: p.entry, sl: p.sl, tp: p.tp1, tp2: p.tp2, grade: p.grade, mode: p.mode, confirm: !!p.confirm, market: !!p.market, atr: p.info.atr };
+        sigs[i] = { dir: p.dir, entry: p.entry, sl: p.sl, tp: p.tp1, tp2: p.tp2, grade: p.grade, mode: p.mode, confirm: !!p.confirm, market: !!p.market, atr: p.info.atr, er: p.info.er, vr: p.info.volRatio };
       }
       if (o.yieldEvery && i % o.yieldEvery === 0) {
         await new Promise(r => setTimeout(r, 0));
@@ -449,7 +449,7 @@ window.TD = window.TD || {};
       const half = pos.half;
       const gross = half ? 0.5 * pos.r1 + 0.5 * R(exit) : R(exit);
       const cost = fee * (pos.entry + (half ? 0.5 * pos.tp + 0.5 * exit : exit)) / pos.risk;
-      trades.push({ dir: pos.dir, grade: pos.grade, mode: pos.mode, confirm: pos.confirm, entryTime: pos.time, exitTime: c[i].time,
+      trades.push({ dir: pos.dir, grade: pos.grade, mode: pos.mode, confirm: pos.confirm, er: pos.er, vr: pos.vr, entryTime: pos.time, exitTime: c[i].time,
         entry: pos.entry, exit, r: gross - cost, cost, why: half && why === 'sl' ? (pos.trailed ? 'trail' : 'be') : why });
       pos = null;
     };
@@ -519,8 +519,14 @@ window.TD = window.TD || {};
   // yang tak pernah dilihat semasa carian. Tetapan cuma DITERIMA kalau ia bertahan pada data baru tu.
   const OPT_SIG = []; for (const slBuf of [0.3, 0.5, 0.8]) for (const minRR of [1.5, 2]) for (const requireConfirm of [false, true]) OPT_SIG.push({ slBuf, minRR, requireConfirm });
   const OPT_SIM = []; for (const manage of ['split', 'trail', 'tp1']) for (const minGrade of ['B', 'A']) OPT_SIM.push({ manage, minGrade });
+  // Walk-forward BERGANDA (anchored, 3 lipatan): latih pada [awal → 55%], uji 55–70%; latih [awal → 70%], uji 70–85%;
+  // latih [awal → 85%], uji 85–100%. Setiap lipatan memilih tetapannya sendiri hanya dari data latihan.
+  // Gabungan semua bahagian ujian = prestasi SEBENAR proses pengoptimuman pada data yang tak pernah dilihat.
+  // Tetapan yang dicadang untuk masa depan = pilihan lipatan terakhir (dilatih dengan data paling baru).
+  const FOLDS = [[0.55, 0.70], [0.70, 0.85], [0.85, 1.00]];
   async function optimize(c, curSec, htfSecs, o = {}) {
-    const n = c.length, start = Math.min(n, 260), cut = Math.floor(start + (n - start) * 0.7);
+    const n = c.length, start = Math.min(n, 260);
+    const at = (f) => Math.floor(start + (n - start) * f);
     const rows = [];
     for (let k = 0; k < OPT_SIG.length; k++) {
       const sg = OPT_SIG[k];
@@ -528,23 +534,70 @@ window.TD = window.TD || {};
         onProgress: (f) => o.onProgress && o.onProgress((k + f) / OPT_SIG.length) });
       if (!pre) return null;
       for (const sm of OPT_SIM) {
-        rows.push({ ...sg, ...sm, is: simulate(c, pre, { ...sm, to: cut, hardEnd: true }), oos: simulate(c, pre, { ...sm, from: cut }) });
+        rows.push({ ...sg, ...sm,
+          folds: FOLDS.map(([a, b]) => ({
+            train: simulate(c, pre, { ...sm, to: at(a), hardEnd: true }),
+            test: simulate(c, pre, { ...sm, from: at(a), to: at(b), hardEnd: b < 1 }),
+          })) });
       }
     }
     const isDefault = (r) => r.slBuf === 0.5 && r.minRR === 1.5 && r.requireConfirm === !!o.defaultConfirm && r.manage === 'split' && r.minGrade === 'B';
     const def = rows.find(isDefault);
-    // skor in-sample: purata R × √n (macam t-stat), supaya sampel kecil yang "bernasib baik" tak menang
+    // skor latihan: purata R × √n (macam t-stat), supaya sampel kecil yang "bernasib baik" tak menang
     const score = (s) => s.expectancy * Math.sqrt(s.n);
-    const eligible = rows.filter(r => r.is.n >= 15 && r.is.expectancy > 0 && r.is.firstHalfR > 0 && r.is.secondHalfR > 0);
-    eligible.sort((a, b) => score(b.is) - score(a.is));
-    const best = eligible[0] || null;
+    const pickFor = (f) => {
+      const el = rows.filter(r => { const s = r.folds[f].train; return s.n >= 12 && s.expectancy > 0 && s.firstHalfR > 0 && s.secondHalfR > 0; });
+      el.sort((a, b) => score(b.folds[f].train) - score(a.folds[f].train));
+      return el;
+    };
+    const foldRes = FOLDS.map(([a, b], f) => {
+      const el = pickFor(f), pick = el[0] || null;
+      return { from: c[at(a)]?.time, to: c[Math.min(n - 1, at(b) - 1)]?.time, pick, test: pick ? pick.folds[f].test : null, def: def ? def.folds[f].test : null };
+    });
+    // gabungan trade bahagian ujian (pilihan setiap lipatan) lawan tetapan asal pada bahagian yang sama
+    const wfTrades = foldRes.flatMap(x => x.test ? x.test.trades : []);
+    const defTrades = foldRes.flatMap(x => x.def ? x.def.trades : []);
+    const wf = { ...stats(wfTrades), trades: wfTrades, ci: confidence(wfTrades) };
+    const dflt = { ...stats(defTrades), trades: defTrades };
+    const lastEl = pickFor(FOLDS.length - 1);
+    const best = lastEl[0] || null; // dilatih dengan data sehingga 85%
+    const foldsPositive = foldRes.filter(x => x.test && x.test.n && x.test.totalR > 0).length;
     let verdict = 'none';
-    if (best) {
-      const beatsDefault = !def || !def.oos.n || best.oos.expectancy >= def.oos.expectancy;
-      verdict = best.oos.n >= 8 && best.oos.expectancy > 0 && beatsDefault ? 'accept' : 'reject';
-    }
-    return { rows, def, best, verdict, top: eligible.slice(0, 5), tested: rows.length,
-      isFrom: c[start]?.time, cutTime: c[cut]?.time, oosTo: c[n - 1]?.time };
+    if (best) verdict = wf.n >= 10 && wf.expectancy > 0 && foldsPositive >= 2 && wf.expectancy >= (dflt.n ? dflt.expectancy : 0) ? 'accept' : 'reject';
+    return { rows, def, best, verdict, folds: foldRes, wf, dflt, foldsPositive, top: lastEl.slice(0, 5), tested: rows.length,
+      isFrom: c[start]?.time, oosTo: c[n - 1]?.time };
+  }
+
+  // ---------- julat keyakinan 95% ----------
+  // Bootstrap: ambil semula trade secara rawak (dengan pengembalian) ribuan kali; julat purata R yang terhasil
+  // menjawab "kalau sejarah berulang dengan nasib berbeza, purata sebenar kemungkinan di antara X dan Y".
+  // Win rate guna selang Wilson (tepat walaupun sampel kecil).
+  function confidence(trades, runs = 2000, seed = 4242) {
+    const rs = trades.map(t => t.r), n = rs.length;
+    if (n < 5) return null;
+    let s = seed;
+    const rnd = () => (s = (s * 16807) % 2147483647) / 2147483647;
+    const means = new Array(runs);
+    for (let k = 0; k < runs; k++) { let sum = 0; for (let j = 0; j < n; j++) sum += rs[Math.floor(rnd() * n)]; means[k] = sum / n; }
+    means.sort((a, b) => a - b);
+    const w = rs.filter(r => r > 0).length / n, z = 1.96, den = 1 + z * z / n;
+    const mid = (w + z * z / (2 * n)) / den, half = z * Math.sqrt(w * (1 - w) / n + z * z / (4 * n * n)) / den;
+    return { expLo: means[Math.floor(0.025 * runs)], expHi: means[Math.floor(0.975 * runs)], winLo: (mid - half) * 100, winHi: (mid + half) * 100,
+      pPositive: means.filter(m => m > 0).length / runs };
+  }
+
+  // ---------- prestasi ikut keadaan pasaran semasa masuk ----------
+  const REGIMES = [
+    ['Trend kuat (ER ≥ 0.35)', t => t.er >= 0.35], ['Trend sederhana', t => t.er >= 0.2 && t.er < 0.35], ['Berombak (ER < 0.2)', t => t.er < 0.2],
+    ['Volatiliti rendah (< 0.8×)', t => t.vr < 0.8], ['Volatiliti normal', t => t.vr >= 0.8 && t.vr <= 1.3], ['Volatiliti tinggi (> 1.3×)', t => t.vr > 1.3],
+  ];
+  function regimeStats(trades) {
+    return REGIMES.map(([name, f]) => { const s = stats(trades.filter(t => t.er != null && f(t))); return { name, n: s.n, winRate: s.winRate, expectancy: s.expectancy }; });
+  }
+  // keadaan pasaran SEKARANG (ikut info trendInfo) → nama baris yang sepadan
+  function regimeNow(info) {
+    const t = { er: info.er, vr: info.volRatio };
+    return REGIMES.filter(([, f]) => f(t)).map(([name]) => name);
   }
 
   // ---------- Monte Carlo: susun semula hasil trade secara rawak ribuan kali ----------
@@ -578,8 +631,11 @@ window.TD = window.TD || {};
     if (bt.expectancy <= 0) return { level: 'bad', text: `Purata ${bt.expectancy.toFixed(2)}R setiap trade selepas yuran. Strategi ni RUGI pada data ni. Jangan guna dengan duit sebenar.` };
     if (bt.firstHalfR <= 0 || bt.secondHalfR <= 0) return { level: 'warn', text: 'Untung keseluruhan, tapi cuma pada separuh tempoh. Tak konsisten: kemungkinan nasib atau keadaan pasaran tertentu sahaja.' };
     if (bt.profitFactor < 1.2) return { level: 'warn', text: `Untung tipis (profit factor ${bt.profitFactor.toFixed(2)}). Sedikit perubahan yuran atau slippage boleh jadikan rugi.` };
-    return { level: 'good', text: `Ada tanda edge: untung pada kedua-dua separuh tempoh, profit factor ${bt.profitFactor.toFixed(2)}. Langkah seterusnya: forward test di akaun demo sekurang-kurangnya 30 trade sebelum duit sebenar.` };
+    // ujian paling ketat: adakah julat keyakinan 95% purata R masih di atas sifar?
+    const ci = bt.ci || confidence(bt.trades || []);
+    if (ci && ci.expLo <= 0) return { level: 'warn', text: `Untung pada kedua-dua separuh tempoh, tapi julat keyakinan 95% purata R ialah ${ci.expLo.toFixed(2)}R hingga +${ci.expHi.toFixed(2)}R: masih merangkumi rugi. Edge belum terbukti secara statistik; perlu lebih banyak trade.` };
+    return { level: 'good', text: `Edge disokong statistik: julat keyakinan 95% purata R ialah +${ci ? ci.expLo.toFixed(2) : '?'}R hingga +${ci ? ci.expHi.toFixed(2) : '?'}R (di atas sifar), untung pada kedua-dua separuh tempoh, profit factor ${bt.profitFactor.toFixed(2)}. Langkah seterusnya: forward test di akaun demo sekurang-kurangnya 30 trade sebelum duit sebenar.` };
   }
 
-  TD.ana = { pivots, structure, zones, divergence, confirmation, trendInfo, plan, aggregate, backtest, backtestPlan, precomputeSignals, simulate, optimize, monteCarlo, stats, judge, STRATS };
+  TD.ana = { pivots, structure, zones, divergence, confirmation, trendInfo, plan, aggregate, backtest, backtestPlan, precomputeSignals, simulate, optimize, confidence, regimeStats, regimeNow, monteCarlo, stats, judge, STRATS };
 })();

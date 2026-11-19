@@ -63,6 +63,11 @@ Analisis berasaskan peraturan, ikut cara trader berpengalaman berfikir. **Bukan 
 - **Penapis BTC** untuk altcoin: setup melawan arah BTC (TF besar) ditolak 1 mata
 - **Live = backtest**: analisis live guna candle yang dah tutup sahaja, dengan harga semasa untuk jarak entry
 - **Rekod sejarah ikut gred & jenis setup**, dan padanan "bila gred ni keluar sebelum ni, berapa kerap menang"
+- **Julat keyakinan 95%** (bootstrap untuk purata R, Wilson untuk win rate) pada backtest, rekod sejarah dan ujian watchlist. "Edge" cuma diiktiraf bila seluruh julat purata R di atas sifar
+- **Uji seluruh watchlist**: enjin analisis pada semua pair sekali gus (sampel 5–7× lebih besar), dengan jadual ikut pair dan lengkung ekuiti gabungan
+- **Prestasi ikut keadaan pasaran** semasa masuk (kekuatan trend × volatiliti), dan padanan dengan keadaan pasaran SEKARANG dalam rekod sejarah
+- **Pengawal pendedahan**: risiko terbuka dalam R (long/short) di tab Pantau; amaran bila beberapa setup crypto sama arah (≈ satu pertaruhan besar)
+- **Walk-forward 3 lipatan** (anchored: uji 55–70%, 70–85%, 85–100%, setiap lipatan pilih tetapan hanya dari data sebelumnya); diterima bila gabungan ujian untung, ≥2/3 lipatan untung dan tak lebih teruk dari tetapan asal
 - **Pengoptimum walk-forward**: 72 kombinasi (penimbal SL, R:R minimum, pengesahan, cara pengurusan, gred) dicari pada 70% sejarah awal, kemudian diuji pada 30% terakhir yang tak pernah dilihat. Tetapan cuma boleh diguna kalau ia untung DAN tak lebih teruk dari tetapan asal pada data baru tu. Diuji: tiada kebocoran data (in-sample sama tepat walaupun 30% terakhir ditukar), dan pada 16 set data rawak semuanya ditolak
 - **Tetapan ditala per pair/TF**: bila diterima, analisis live, rekod sejarah, imbasan dan "Guna pelan" semua ikut tetapan tu (boleh reset)
 - **Trailing stop**: 50% di TP1, baki diikut 1.5 ATR dari harga ekstrem; disokong dalam backtest DAN setup live

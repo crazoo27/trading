@@ -13,9 +13,9 @@
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <title>TradeDesk</title>
   <link rel="preconnect" href="https://www.okx.com" crossorigin>
-  <link rel="stylesheet" href="css/style.css?v=10">
+  <link rel="stylesheet" href="css/style.css?v=11">
   <!-- Mula minta data candle SEKARANG, sementara skrip chart yang besar masih dimuat turun dan diproses. -->
-  <script src="js/feeds.js?v=10"></script>
+  <script src="js/feeds.js?v=11"></script>
   <script>
     try {
       var st = JSON.parse(localStorage.getItem('tradedesk.v2') || '{}');
@@ -164,6 +164,9 @@
           <p class="muted" style="margin:0">Jalankan analisis yang sama pada semua pair dalam watchlist. Trader berpengalaman pilih peluang terbaik, bukan paksa satu pair.</p>
           <div class="row"><select id="scanTf" class="sel"><option value="1h">1h</option><option value="4h" selected>4h</option><option value="1d">1d</option></select><button class="btn" id="btnScan">🔎 Imbas</button></div>
           <div id="scanOut" class="list"></div>
+          <button class="btn" id="btnPort">📊 Uji analisis pada SELURUH watchlist (TF di atas)</button>
+          <p class="muted" style="margin:0">Satu pair jarang ada cukup trade untuk keputusan yang boleh dipercayai. Gabungkan semua pair untuk sampel 5–7× lebih besar. Ambil masa 30–90 saat.</p>
+          <div id="portOut" class="list"></div>
 
           <h4>🚀 Optimumkan: walk-forward</h4>
           <p class="muted" style="margin:0">Cari tetapan terbaik (72 kombinasi) pada <b>70% sejarah awal</b>, kemudian uji pada <b>30% terakhir</b> yang tak pernah dilihat. Tetapan cuma boleh diguna kalau ia masih untung pada data baru tu: ini elak "overfitting".</p>
@@ -258,9 +261,9 @@
   <div id="toasts" class="toasts"></div>
 
   <script src="lib/lightweight-charts.standalone.production.js?v=5.3.0"></script>
-  <script src="js/indicators.js?v=10"></script>
-  <script src="js/analysis.js?v=10"></script>
-  <script src="js/drawings.js?v=10"></script>
-  <script src="js/app.js?v=10"></script>
+  <script src="js/indicators.js?v=11"></script>
+  <script src="js/analysis.js?v=11"></script>
+  <script src="js/drawings.js?v=11"></script>
+  <script src="js/app.js?v=11"></script>
 </body>
 </html>
