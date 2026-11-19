@@ -61,6 +61,7 @@
     btFee: saved.btFee ?? 0.1,
     anaZones: saved.anaZones ?? true,
     anaConfirm: saved.anaConfirm ?? false,
+    tuned: saved.tuned || {}, // tetapan walk-forward yang diterima, ikut 'PAIR|TF'
     source: saved.source || null,
     magnet: saved.magnet ?? false,
     hideDrawings: false,
@@ -85,7 +86,7 @@
   const persistNow = () => { clearTimeout(persistTimer); persistTimer = null; store.save(snapshotState()); };
   const snapshotState = () => ({
     symbol: S.symbol, interval: S.interval, chartType: S.chartType, watch: S.watch, indicators: S.indicators, drawings: S.drawings,
-    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen, dailyR: S.dailyR, btFee: S.btFee, anaZones: S.anaZones, anaConfirm: S.anaConfirm,
+    balance: S.balance, riskPct: S.riskPct, sound: S.sound, autoSignal: S.autoSignal, showSignals: S.showSignals, demo: S.demo, demoManual: S.demoManual, source: S.source, ccy: S.ccy, fx: S.fx, spotOnly: S.spotOnly, legendOpen: S.legendOpen, dailyR: S.dailyR, btFee: S.btFee, anaZones: S.anaZones, anaConfirm: S.anaConfirm, tuned: S.tuned,
     magnet: S.magnet, priceMode: S.priceMode, sideTab: S.sideTab, sideCollapsed: S.sideCollapsed,
     setups: S.setups, alerts: S.alerts, log: S.log.slice(0, 100),
   });
@@ -783,7 +784,7 @@
   function liveR(s, px) {
     if (s.status !== 'active' || px == null) return null;
     const r = rAt(s, px);
-    return s.tp1Hit && s.tp2 ? 0.5 * rAt(s, s.tp1) + 0.5 * r : r;
+    return s.tp1Hit && (s.tp2 || s.trail) ? 0.5 * rAt(s, s.tp1) + 0.5 * r : r;
   }
 
   // ---------- alert pada garisan / zon ----------
@@ -862,15 +863,24 @@
       }
       if (slHit()) {
         const be = s.tp1Hit && s.sl === s.entry;
-        closeSetup(s, s.sl, be ? 'be' : 'sl'); changed = true;
-        notify(be ? `Breakeven · ${sym}` : `❌ Stop loss kena · ${sym}`, `${s.dir.toUpperCase()} ditutup @ ${fmt(s.sl, decOf(sym))} (${fmtR(s.r)} / ${fmtUsd(s.pnl)})`, be ? 'info' : 'bad');
+        const trailOut = s.tp1Hit && s.trail && !be;
+        closeSetup(s, s.sl, be ? 'be' : trailOut ? 'trail' : 'sl'); changed = true;
+        notify(be ? `Breakeven · ${sym}` : trailOut ? `🏁 Trailing stop · ${sym}` : `❌ Stop loss kena · ${sym}`,
+          `${s.dir.toUpperCase()} ditutup @ ${fmt(s.sl, decOf(sym))} (${fmtR(s.r)} / ${fmtUsd(s.pnl)})`, be ? 'info' : trailOut ? 'good' : 'bad');
         continue;
       }
+      // trailing stop: selepas TP1, SL ikut harga ekstrem dengan jarak tetap (untuk candle/tick seterusnya)
+      if (s.tp1Hit && s.trail) {
+        s.ext = long ? Math.max(s.ext ?? price, hi) : Math.min(s.ext ?? price, lo);
+        const t = long ? s.ext - s.trail : s.ext + s.trail;
+        if (long ? t > s.sl : t < s.sl) { s.sl = t; changed = true; }
+      }
       if (!s.tp1Hit && tpHit(s.tp1)) {
-        if (s.tp2) {
+        if (s.tp2 || s.trail) {
           s.tp1Hit = true; changed = true;
-          if (s.be) s.sl = s.entry;
-          notify(`🎯 TP1 kena · ${sym}`, `50% ditutup @ ${fmt(s.tp1, decOf(sym))} (+${rAt(s, s.tp1).toFixed(2)}R).${s.be ? ' SL dialih ke breakeven.' : ''}`, 'good');
+          if (s.be || s.trail) s.sl = s.entry;
+          if (s.trail) s.ext = long ? hi : lo;
+          notify(`🎯 TP1 kena · ${sym}`, `50% ditutup @ ${fmt(s.tp1, decOf(sym))} (+${rAt(s, s.tp1).toFixed(2)}R). SL dialih ke breakeven${s.trail ? ', baki diikut trailing stop' : s.be ? '' : ''}.`, 'good');
         } else {
           closeSetup(s, s.tp1, 'tp'); changed = true;
           notify(`🎯 Take profit · ${sym}`, `Ditutup @ ${fmt(s.tp1, decOf(sym))} (${fmtR(s.r)} / ${fmtUsd(s.pnl)})`, 'good');
@@ -898,7 +908,7 @@
     s.outcome = outcome; s.closedAt = Date.now();
     if (exitPx != null) {
       s.exit = exitPx;
-      s.r = s.tp1Hit && s.tp2 ? 0.5 * rAt(s, s.tp1) + 0.5 * rAt(s, exitPx) : rAt(s, exitPx);
+      s.r = s.tp1Hit && (s.tp2 || s.trail) ? 0.5 * rAt(s, s.tp1) + 0.5 * rAt(s, exitPx) : rAt(s, exitPx);
       s.pnl = s.r * s.riskUsd;
     }
   }
@@ -970,12 +980,12 @@
     const px = priceOf(S.symbol);
     const s = {
       id: uid(), symbol: S.symbol, interval: S.interval, dir: d.dir, entry, sl: d.sl, origSl: d.sl, tp1: d.tp1, tp2: d.tp2,
-      be: d.be, note: d.note, riskUsd: S.balance * S.riskPct / 100, createdAt: Date.now(),
+      be: d.be, trail: d.trail || null, note: d.note, riskUsd: S.balance * S.riskPct / 100, createdAt: Date.now(),
       status: d.type === 'market' ? 'active' : 'pending', trigger: entry <= px ? 'below' : 'above',
     };
     if (s.status === 'active') s.filledAt = Date.now();
     S.setups.unshift(s);
-    S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null, note: '' };
+    S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null, note: '', trail: null };
     persist(); syncDraftInputs(); drawLines(); renderCalc(); renderOpen(); restartTickers();
     toast('Setup disimpan', `${s.dir.toUpperCase()} ${s.symbol} — ${s.status === 'active' ? 'aktif sekarang' : 'menunggu harga ' + fmt(entry)}.`, 'good');
     switchTab('open', true);
@@ -1077,7 +1087,7 @@
     const d = decimalsFor(s.entry);
     const statusTxt = {
       pending: 'Tunggu entry', active: 'AKTIF',
-      closed: { tp: 'Profit', sl: 'Loss', be: 'Breakeven', manual: 'Tutup manual' }[s.outcome],
+      closed: { tp: 'Profit', sl: 'Loss', be: 'Breakeven', manual: 'Tutup manual', trail: 'Trailing stop' }[s.outcome],
       cancelled: { invalid: 'Batal (SL dulu)', missed: 'Terlepas', cancel: 'Dibatalkan' }[s.outcome],
     }[s.status];
     const date = new Date(s.closedAt || s.createdAt).toLocaleString('ms-MY', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' });
@@ -1355,7 +1365,7 @@
   $$('.pick[data-pick]').forEach(b => b.onclick = () => setPick(S.pick === b.dataset.pick ? null : b.dataset.pick));
   $('#btnNow').onclick = () => { if (priceOf(S.symbol) == null) return; S.draft.entry = roundP(priceOf(S.symbol)); syncDraftInputs(); drawLines(); renderCalc(); };
   $('#btnSave').onclick = saveDraft;
-  $('#btnClear').onclick = () => { S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null, note: '' }; syncDraftInputs(); drawLines(); renderCalc(); };
+  $('#btnClear').onclick = () => { S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null, note: '', trail: null }; syncDraftInputs(); drawLines(); renderCalc(); };
 
   document.body.addEventListener('click', e => {
     const go = e.target.closest('[data-go]'); if (go) { goSymbol(go.dataset.go); return; }
@@ -1489,6 +1499,24 @@
   // hanya candle yang DAH TUTUP (candle terakhir sedang terbentuk) supaya live = peraturan backtest
   const closedOf = (c) => c.length > 61 ? c.slice(0, -1) : c;
 
+  // ---- tetapan ditala (walk-forward) untuk pair/TF; tiada = tetapan asal ----
+  const tunedFor = (sym = S.symbol, iv = S.interval) => S.tuned[`${sym}|${iv}`] || null;
+  function planOpts(sym, iv) {
+    const t = tunedFor(sym, iv);
+    return { spotOnly: S.spotOnly, feePct: S.btFee, requireConfirm: t ? t.requireConfirm : S.anaConfirm,
+      slBuf: t ? t.slBuf : undefined, minRR: t ? t.minRR : undefined, minGrade: t ? t.minGrade : undefined };
+  }
+  function engineOpts(sym, iv) {
+    const t = tunedFor(sym, iv);
+    return t ? { requireConfirm: t.requireConfirm, slBuf: t.slBuf, minRR: t.minRR, manage: t.manage, minGrade: t.minGrade }
+      : { requireConfirm: S.anaConfirm, manage: 'split', minGrade: 'B' };
+  }
+  const MANAGE_TXT = { split: '50% TP1 + BE + TP2', trail: '50% TP1 + trailing stop', tp1: 'penuh di TP1' };
+  function engineLabel(t = tunedFor()) {
+    if (!t) return `tetapan asal: ${S.anaConfirm ? 'mod pengesahan' : 'order limit'}, ${MANAGE_TXT.split}`;
+    return `ditala: ${t.requireConfirm ? 'pengesahan' : 'limit'}, SL +${t.slBuf} ATR, R:R min ${t.minRR}, ${MANAGE_TXT[t.manage]}, gred ${t.minGrade === 'A' ? 'A sahaja' : 'A & B'}`;
+  }
+
   let anaTimer = null, anaDirty = true, anaRun = 0, lastPlan = null;
   function scheduleAnalysis() {
     anaDirty = true;
@@ -1516,7 +1544,7 @@
       const bi = bc && bc.length >= 60 ? A.trendInfo(closedOf(bc)) : null;
       btcDir = bi ? bi.dir : null;
     }
-    const p = A.plan(closedOf(S.candles), htf, { spotOnly: S.spotOnly, feePct: S.btFee, requireConfirm: S.anaConfirm, btcDir, livePx: S.candles[S.candles.length - 1].close });
+    const p = A.plan(closedOf(S.candles), htf, { ...planOpts(), btcDir, livePx: S.candles[S.candles.length - 1].close });
     lastPlan = { ...p, symbol: S.symbol, interval: S.interval, htf, btcDir, btcTf: btf };
     const z = p.zones;
     drawings.setZones(S.anaZones && z ? [...z.above, ...z.inside, ...z.below] : []);
@@ -1529,11 +1557,11 @@
   async function historyRecord(run, key, tfs) {
     const el = () => $('#anaRec');
     const lastT = S.candles.length ? S.candles[S.candles.length - 1].time : 0;
-    const cKey = `${key}|${S.spotOnly ? 's' : 'a'}|${S.btFee}|${S.anaConfirm ? 'c' : 'l'}`;
+    const cKey = `${key}|${S.spotOnly ? 's' : 'a'}|${S.btFee}|${JSON.stringify(engineOpts())}`;
     let hit = recCache.get(cKey);
     if (!hit || lastT - hit.lastT > 8 * INTERVAL_SEC[S.interval]) {
       if (el()) el().innerHTML = '<span class="muted">Menguji analisis ni pada sejarah pair ni…</span>';
-      const bt = await runEngineBacktest(closedOf(S.candles), S.interval, { minGrade: 'B', manage: 'split', requireConfirm: S.anaConfirm, yieldEvery: 40, cancelled: () => run !== anaRun });
+      const bt = await runEngineBacktest(closedOf(S.candles), S.interval, { ...engineOpts(), yieldEvery: 40, cancelled: () => run !== anaRun });
       if (!bt) return;
       hit = { lastT, bt };
       recCache.set(cKey, hit);
@@ -1547,7 +1575,7 @@
     const cur = lastPlan && lastPlan.grade && lastPlan.verdict !== 'TUNGGU' ? g[lastPlan.grade] : null;
     el().innerHTML = bt.n
       ? `<b class="${bt.expectancy > 0 ? 'pos' : 'neg'}">${bt.n} setup lepas: win rate ${bt.winRate.toFixed(0)}%, purata ${fmtR(bt.expectancy)} setiap trade</b>
-         <span class="muted"> dalam ${days} hari (${esc(S.symbol)} ${esc(S.interval)}, yuran ${bt.feePct}%, ${S.anaConfirm ? 'mod pengesahan' : 'order limit'}, 50% di TP1 + BE).</span>
+         <span class="muted"> dalam ${days} hari (${esc(S.symbol)} ${esc(S.interval)}, yuran ${bt.feePct}%, ${esc(engineLabel())}).</span>
          ${cur && cur.n ? `<div class="rec-j ${cur.expectancy > 0 ? 'good' : 'bad'}">Setup sekarang gred ${lastPlan.grade}: sebelum ni gred ${lastPlan.grade} pada pair ni ${cur.n} kali, menang ${cur.winRate.toFixed(0)}%, purata ${fmtR(cur.expectancy)}.</div>` : ''}
          <div class="ana-kv">${grp('Gred A', g.A)}${grp('Gred B', g.B)}${grp('Setup trend', g.trend)}${grp('Setup julat', g.julat)}</div>
          <div class="rec-j ${j.level}">${esc(j.text)}</div>`
@@ -1582,7 +1610,7 @@
       : '⏸ TUNGGU, tiada setup berkualiti';
     let html = `<div class="card ana-verdict ${vCls}"><div class="v">${vTxt}</div>`;
     if (p.reasons.length) html += `<ul class="reasons">${p.reasons.map(r => `<li>${esc(r)}</li>`).join('')}</ul>`;
-    html += `<div class="rec"><div class="rec-h">📜 Rekod analisis ni pada sejarah</div><div id="anaRec"><span class="muted">…</span></div></div>`;
+    html += `<div class="rec"><div class="rec-h">📜 Rekod analisis ni pada sejarah${tunedFor() ? ' · <span class="pos">⚙ tetapan ditala aktif</span>' : ''}</div><div id="anaRec"><span class="muted">…</span></div></div>`;
     html += `</div>`;
 
     if (p.entry != null && p.rr != null) {
@@ -1626,8 +1654,9 @@
     if (!e.target.closest('#btnUsePlan') || !lastPlan || lastPlan.entry == null) return;
     const p = lastPlan;
     if (p.symbol !== S.symbol) return;
-    S.draft = { ...S.draft, dir: p.dir, type: 'limit', entry: roundP(p.entry), sl: roundP(p.sl), tp1: roundP(p.tp1), tp2: roundP(p.tp2),
-      note: `Analisis auto: ${p.verdict}, gred ${p.grade} (${p.score}/7), bias ${p.bias}${p.htf?.length ? ' ikut ' + p.htf.map(h => h.tf).join('/') : ''}` };
+    const mg = (tunedFor() || {}).manage || 'split';
+    S.draft = { ...S.draft, dir: p.dir, type: 'limit', entry: roundP(p.entry), sl: roundP(p.sl), tp1: roundP(p.tp1), tp2: mg === 'split' ? roundP(p.tp2) : null, be: mg !== 'tp1', trail: mg === 'trail' && p.info ? +(1.5 * p.info.atr).toPrecision(6) : null,
+      note: `${tunedFor() ? '[Ditala] ' : ''}Analisis auto: ${p.verdict}, gred ${p.grade} (${p.score}/7), bias ${p.bias}${p.htf?.length ? ' ikut ' + p.htf.map(h => h.tf).join('/') : ''}` };
     syncDraftInputs(); drawLines(); renderCalc(); switchTab('setup', true);
     toast('Pelan dimuat ke Setup', 'Semak nilai, kemudian tekan "Simpan & pantau".', 'info');
   });
@@ -1754,6 +1783,94 @@
       ${bt.expectancy > 0 && bt.maxLoseStreak >= 2 ? `Rugi ${bt.maxLoseStreak} kali berturut-turut pun berlaku dalam strategi yang untung: bersedia dari segi mental dan modal.` : ''}</p>`;
   };
 
+  // ---- sejarah panjang untuk ujian (dikongsi backtest & pengoptimum) ----
+  async function loadTestCandles(btn, sym, iv, cancelled) {
+    let candles = closedOf(S.candles);
+    if (!$('#btDeep').checked || !feed || S.demo || !feed.historyDeep) return candles;
+    const key = `${sym}|${iv}|${feed.id}`;
+    let hit = deepCache.get(key);
+    if (!hit || Date.now() - hit.at > 30 * 60e3) {
+      try {
+        const c = await feed.historyDeep(sym, iv, 3000, (f) => { btn.textContent = `Memuat sejarah panjang… ${Math.round(f * 100)}%`; });
+        hit = { at: Date.now(), c: closedOf(c) }; deepCache.set(key, hit);
+      } catch { hit = null; }
+    }
+    if (cancelled()) return null;
+    return hit && hit.c.length > candles.length ? hit.c : candles;
+  }
+
+  // ---- pengoptimum walk-forward ----
+  let optBusy = false, lastOpt = null;
+  $('#btnOpt').onclick = async () => {
+    if (optBusy) return;
+    const sym = S.symbol, iv = S.interval, key = `${sym}|${iv}`;
+    const cancelled = () => sym !== S.symbol || iv !== S.interval;
+    const btn = $('#btnOpt'), label = btn.textContent;
+    optBusy = true;
+    let res, candles;
+    try {
+      candles = await loadTestCandles(btn, sym, iv, cancelled);
+      if (!candles) return;
+      if (candles.length < 600) { $('#optOut').innerHTML = '<div class="empty">Perlu sekurang-kurangnya 600 candle sejarah. Tick "Sejarah panjang" di bawah, atau guna timeframe lain.</div>'; return; }
+      const tfs = HTF[iv] || [];
+      const htfData = [];
+      for (const tf of tfs) { const h = await getHTF(tf); htfData.push(h ? closedOf(h) : null); }
+      const btf = btcTfFor(iv);
+      const btcData = btf ? await getHTF(btf, 'BTCUSDT') : null;
+      res = await A.optimize(candles, INTERVAL_SEC[iv], tfs.map(tf => INTERVAL_SEC[tf]), {
+        feePct: S.btFee, allowShort: !S.spotOnly, htfData, btcData: btcData ? closedOf(btcData) : null, btcSec: btf ? INTERVAL_SEC[btf] : null,
+        defaultConfirm: S.anaConfirm, yieldEvery: 60, cancelled,
+        onProgress: (f) => { btn.textContent = `Mengoptimum… ${Math.round(f * 100)}%`; },
+      });
+    } finally { optBusy = false; btn.textContent = label; }
+    if (!res) return;
+    lastOpt = { key, res };
+    renderOpt(res, key, candles);
+  };
+  const paramTxt = (r) => `${r.requireConfirm ? 'Pengesahan' : 'Limit'} · SL +${r.slBuf} ATR · R:R ≥${r.minRR} · ${MANAGE_TXT[r.manage]} · gred ${r.minGrade === 'A' ? 'A' : 'A&B'}`;
+  function renderOpt(res, key, candles) {
+    const d = (t) => new Date(t * 1000).toLocaleDateString('ms-MY', { day: 'numeric', month: 'short', year: '2-digit' });
+    const { best, def } = res;
+    const v = res.verdict === 'accept'
+      ? { cls: 'good', t: `✅ Tetapan baru BERTAHAN pada data yang tak pernah dilihat: purata ${fmtR(best.oos.expectancy)} setiap trade (${best.oos.n} trade), berbanding tetapan asal ${def && def.oos.n ? fmtR(def.oos.expectancy) : 'tiada trade'}.` }
+      : res.verdict === 'reject'
+        ? { cls: 'wait', t: `⚠ Tetapan "terbaik" dalam sejarah GAGAL pada data baru (${best.oos.n} trade, purata ${fmtR(best.oos.expectancy)}). Ini overfitting: angka cantik dalam sejarah, tapi tak bertahan. Kekalkan tetapan asal.` }
+        : { cls: 'bad', t: '❌ Tiada tetapan yang untung secara konsisten pada 70% sejarah awal (perlu ≥15 trade dan untung pada kedua-dua separuh). Analisis ni belum terbukti untuk pair/TF ni: jangan trade dengan duit sebenar.' };
+    const row = (name, r) => r ? `<tr><td>${name}</td><td>${r.is.n}</td><td class="${r.is.expectancy >= 0 ? 'pos' : 'neg'}">${fmtR(r.is.expectancy)}</td><td>${r.oos.n}</td><td class="${r.oos.expectancy >= 0 ? 'pos' : 'neg'}">${r.oos.n ? fmtR(r.oos.expectancy) : '—'}</td><td>${r.oos.n ? r.oos.winRate.toFixed(0) + '%' : '—'}</td></tr>` : '';
+    const top = res.top.map((r, k) => `<div class="zrow"><b>#${k + 1}</b><span>${esc(paramTxt(r))}</span><span class="${r.oos.expectancy >= 0 ? 'pos' : 'neg'}">${r.oos.n ? fmtR(r.oos.expectancy) : '—'}</span></div>`).join('');
+    const tuned = S.tuned[key];
+    $('#optOut').innerHTML = `
+      <div class="card ana-verdict ${v.cls}"><div class="v">${esc(v.t)}</div></div>
+      <div class="card"><div class="hd"><b>Asal lawan terbaik</b><span class="muted">${res.tested} kombinasi diuji</span></div>
+        <table class="cmp"><thead><tr><th>Tetapan</th><th>Trade 70%</th><th>Purata</th><th>Trade 30%</th><th>Purata</th><th>Menang</th></tr></thead>
+        <tbody>${row('Asal', def)}${row('Terbaik', best)}</tbody></table>
+        ${best ? `<p class="muted" style="margin:6px 0 0">Terbaik: ${esc(paramTxt(best))}</p>` : ''}
+        <p class="muted" style="margin:4px 0 0">70% awal: ${d(res.isFrom)} – ${d(res.cutTime)} · 30% terakhir (ujian sebenar): ${d(res.cutTime)} – ${d(res.oosTo)} · ${candles.length} candle.</p>
+      </div>
+      ${top ? `<div class="card"><div class="hd"><b>5 calon teratas (ikut 70% awal)</b><span class="muted">purata pada 30%</span></div>${top}
+        <p class="muted" style="margin:6px 0 0">Kalau calon teratas berbeza-beza teruk pada 30% terakhir, maknanya keputusan ni rapuh.</p></div>` : ''}
+      <div class="row">
+        ${res.verdict === 'accept' ? `<button class="btn primary" id="btnApplyOpt">Guna tetapan ni untuk ${esc(key.replace('|', ' '))}</button>` : ''}
+        ${tuned ? '<button class="btn" id="btnResetOpt">Kembali ke tetapan asal</button>' : ''}
+      </div>
+      ${tuned ? `<p class="muted">Aktif sekarang: ${esc(engineLabel(tuned))}</p>` : ''}
+      <p class="muted">Walaupun lulus, prestasi masa depan biasanya LEBIH RENDAH dari ujian. Forward test di akaun demo dulu.</p>`;
+  }
+  $('#optOut').addEventListener('click', e => {
+    if (e.target.closest('#btnApplyOpt') && lastOpt && lastOpt.res.best) {
+      const b = lastOpt.res.best;
+      S.tuned[lastOpt.key] = { slBuf: b.slBuf, minRR: b.minRR, requireConfirm: b.requireConfirm, manage: b.manage, minGrade: b.minGrade, at: Date.now(), oosExp: b.oos.expectancy, oosN: b.oos.n };
+      persist(); recCache.clear(); runAnalysis();
+      toast('Tetapan ditala diguna', `${lastOpt.key.replace('|', ' ')}: ${paramTxt(b)}`, 'good');
+      renderOpt(lastOpt.res, lastOpt.key, { length: '…' });
+    }
+    if (e.target.closest('#btnResetOpt') && lastOpt) {
+      delete S.tuned[lastOpt.key]; persist(); recCache.clear(); runAnalysis();
+      toast('Kembali ke tetapan asal', lastOpt.key.replace('|', ' '), 'info');
+      renderOpt(lastOpt.res, lastOpt.key, { length: '…' });
+    }
+  });
+
   // ---- imbas watchlist ----
   // Ambil 300 candle sahaja setiap pair/TF (cukup untuk EMA200 + struktur) dan hadkan permintaan serentak
   // supaya tak kena had kadar (rate limit) exchange.
@@ -1790,7 +1907,7 @@
           let btcDir = null;
           const btf = btcTfFor(tf, sym);
           if (btf) { const bh = await hist('BTCUSDT', btf); const bi = bh && bh.length >= 60 ? A.trendInfo(closedOf(bh)) : null; btcDir = bi ? bi.dir : null; }
-          r = A.plan(c, htf, { spotOnly: S.spotOnly, feePct: S.btFee, requireConfirm: S.anaConfirm, btcDir, livePx: raw[raw.length - 1].close });
+          r = A.plan(c, htf, { ...planOpts(sym, tf), btcDir, livePx: raw[raw.length - 1].close });
         }
         btn.textContent = `${++done}/${syms.length}`;
         return { sym, r };

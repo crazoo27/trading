@@ -63,6 +63,9 @@ Analisis berasaskan peraturan, ikut cara trader berpengalaman berfikir. **Bukan 
 - **Penapis BTC** untuk altcoin: setup melawan arah BTC (TF besar) ditolak 1 mata
 - **Live = backtest**: analisis live guna candle yang dah tutup sahaja, dengan harga semasa untuk jarak entry
 - **Rekod sejarah ikut gred & jenis setup**, dan padanan "bila gred ni keluar sebelum ni, berapa kerap menang"
+- **Pengoptimum walk-forward**: 72 kombinasi (penimbal SL, R:R minimum, pengesahan, cara pengurusan, gred) dicari pada 70% sejarah awal, kemudian diuji pada 30% terakhir yang tak pernah dilihat. Tetapan cuma boleh diguna kalau ia untung DAN tak lebih teruk dari tetapan asal pada data baru tu. Diuji: tiada kebocoran data (in-sample sama tepat walaupun 30% terakhir ditukar), dan pada 16 set data rawak semuanya ditolak
+- **Tetapan ditala per pair/TF**: bila diterima, analisis live, rekod sejarah, imbasan dan "Guna pelan" semua ikut tetapan tu (boleh reset)
+- **Trailing stop**: 50% di TP1, baki diikut 1.5 ATR dari harga ekstrem; disokong dalam backtest DAN setup live
 - **Backtest sejarah panjang** (≈3000 candle, OKX/Binance) dan **perbandingan 4 cara pelaksanaan** (limit vs pengesahan × 50% TP1+BE vs penuh di TP1), dengan amaran overfitting
 
 ## Prestasi

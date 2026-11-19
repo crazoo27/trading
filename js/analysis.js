@@ -181,7 +181,8 @@ window.TD = window.TD || {};
     if (!zone) { res.verdict = 'TUNGGU'; res.reasons.push('Tiada zon masuk yang jelas.'); return res; }
     res.zone = zone;
     res.entry = L ? Math.min(px, zone.hi) : Math.max(px, zone.lo);
-    let sl = L ? zone.lo - atr * 0.5 : zone.hi + atr * 0.5;
+    const slBuf = opts.slBuf ?? 0.5; // penimbal SL di sebalik zon, dalam ATR
+    let sl = L ? zone.lo - atr * slBuf : zone.hi + atr * slBuf;
     if (Math.abs(res.entry - sl) < atr * 0.6) sl = L ? res.entry - atr * 0.6 : res.entry + atr * 0.6; // SL terlalu rapat mudah kena "noise"
     res.sl = sl;
     const risk0 = Math.abs(res.entry - sl);
@@ -226,7 +227,7 @@ window.TD = window.TD || {};
     const zone = L ? sup : resi;
     res.zone = zone;
     res.entry = L ? Math.min(px, zone.hi) : Math.max(px, zone.lo);
-    res.sl = L ? zone.lo - atr * 0.5 : zone.hi + atr * 0.5;
+    res.sl = L ? zone.lo - atr * (opts.slBuf ?? 0.5) : zone.hi + atr * (opts.slBuf ?? 0.5);
     if (Math.abs(res.entry - res.sl) < atr * 0.6) res.sl = L ? res.entry - atr * 0.6 : res.entry + atr * 0.6;
     res.tp1 = L ? resi.lo - 0.2 * atr : sup.hi + 0.2 * atr; // ambil untung sebelum sempadan bertentangan
     res.tp2 = L ? resi.hi : sup.lo;
@@ -270,8 +271,9 @@ window.TD = window.TD || {};
     res.score = pass;
     res.grade = pass >= 6 ? 'A' : pass >= 4 ? 'B' : 'C';
 
-    if (res.rr < 1.5) res.reasons.push(`R:R cuma 1:${res.rr.toFixed(2)}: ${res.mode === 'julat' ? 'julat' : 'zon seterusnya'} terlalu dekat. Untung tak berbaloi dengan risiko.`);
+    if (res.rr < (opts.minRR ?? 1.5)) res.reasons.push(`R:R cuma 1:${res.rr.toFixed(2)}: ${res.mode === 'julat' ? 'julat' : 'zon seterusnya'} terlalu dekat. Untung tak berbaloi dengan risiko.`);
     if (res.grade === 'C') res.reasons.push(`Cuma ${pass}/7 faktor selari. Terlalu sedikit untuk ambil risiko.`);
+    if (opts.minGrade === 'A' && res.grade === 'B') res.reasons.push('Tetapan dioptimum untuk pair/TF ni: ambil gred A sahaja. Setup gred B dilangkau.');
     if (!L && opts.spotOnly) res.reasons.push(res.mode === 'julat' ? 'Harga di bumbung julat (peluang jual), tapi akaun spot tak boleh short.' : 'Bias turun, tapi akaun spot tak boleh short. Duduk tepi atau tunggu trend berubah.');
     if (res.feeR > 0.25) res.reasons.push(`Yuran ${opts.feePct}% makan ${res.feeR.toFixed(2)}R untuk SL serapat ni. Guna timeframe lebih besar (SL lebih jauh) supaya yuran jadi kecil.`);
 
@@ -391,11 +393,15 @@ window.TD = window.TD || {};
   // o.requireConfirm: masuk hanya selepas candle penolakan tutup, pada harga BUKA candle seterusnya.
   // o.btcData + o.btcSec: candle BTC (TF besar) untuk penapis BTC, dikira dengan peraturan "dah tutup" yang sama.
   // SL dikira dulu kalau SL & TP kena dalam candle sama. Yuran ditolak pada setiap transaksi.
-  async function backtestPlan(c, curSec, htfSecs, o = {}) {
-    const fee = (o.feePct ?? 0.1) / 100, minGrade = o.minGrade || 'B', allowShort = o.allowShort !== false;
-    const split = (o.manage || 'split') === 'split';
-    const WIN = 600, EXP = o.expiry || 12, n = c.length, start = Math.min(n, 260);
-    const gradeOk = (g) => g === 'A' || (minGrade === 'B' && g === 'B');
+  // Dipecah kepada dua langkah:
+  //   1) precomputeSignals: jalankan plan() pada SETIAP candle (hanya data setakat candle tu). Keputusan plan()
+  //      tak bergantung pada posisi terbuka, jadi boleh dikira sekali dan diguna semula.
+  //   2) simulate: jalankan pengurusan order/posisi atas isyarat tu. Sangat laju, jadi banyak cara
+  //      pengurusan boleh diuji atas isyarat yang sama (untuk pengoptimum walk-forward).
+  const BT_WIN = 600;
+  async function precomputeSignals(c, curSec, htfSecs, o = {}) {
+    const fee = (o.feePct ?? 0.1) / 100, allowShort = o.allowShort !== false;
+    const n = c.length, start = Math.min(n, 260);
     const mkSeries = (sec, given) => ({ sec, agg: given && given.length >= 60 ? given : aggregate(c, sec), k: -1, info: null });
     const aggs = htfSecs.map((sec, j) => mkSeries(sec, o.htfData && o.htfData[j]));
     const btc = o.btcData && o.btcData.length >= 60 ? { sec: o.btcSec, agg: o.btcData, k: -1, info: null } : null;
@@ -403,18 +409,48 @@ window.TD = window.TD || {};
     const closedInfo = (h, tClose) => {
       let k = h.k;
       while (k + 1 < h.agg.length && h.agg[k + 1].time + h.sec <= tClose) k++;
-      if (k !== h.k) { h.k = k; h.info = k >= 59 ? trendInfo(h.agg.slice(Math.max(0, k - WIN + 1), k + 1)) : null; }
+      if (k !== h.k) { h.k = k; h.info = k >= 59 ? trendInfo(h.agg.slice(Math.max(0, k - BT_WIN + 1), k + 1)) : null; }
       return h.info;
     };
+    const sigs = new Array(n).fill(null);
+    for (let i = start; i < n - 1; i++) {
+      const tClose = c[i].time + curSec;
+      const htf = aggs.map(h => ({ tf: String(h.sec), info: closedInfo(h, tClose) }));
+      const btcInfo = btc ? closedInfo(btc, tClose) : null;
+      const p = plan(c.slice(Math.max(0, i - BT_WIN + 1), i + 1), htf, {
+        spotOnly: !allowShort, feePct: fee * 100, requireConfirm: o.requireConfirm, btcDir: btcInfo ? btcInfo.dir : null,
+        slBuf: o.slBuf, minRR: o.minRR,
+      });
+      if (p.verdict !== 'TUNGGU' && (p.grade === 'A' || p.grade === 'B')) {
+        sigs[i] = { dir: p.dir, entry: p.entry, sl: p.sl, tp: p.tp1, tp2: p.tp2, grade: p.grade, mode: p.mode, confirm: !!p.confirm, market: !!p.market, atr: p.info.atr };
+      }
+      if (o.yieldEvery && i % o.yieldEvery === 0) {
+        await new Promise(r => setTimeout(r, 0));
+        if (o.onProgress) o.onProgress((i - start) / Math.max(1, n - start));
+        if (o.cancelled && o.cancelled()) return null;
+      }
+    }
+    return { sigs, start, fee };
+  }
+
+  // Pengurusan (o.manage):
+  //   'split' : 50% keluar di TP1, SL dialih ke entry, baki di TP2 / breakeven (sama macam setup dalam app)
+  //   'trail' : 50% keluar di TP1, baki diikut dengan trailing stop 1.5 ATR dari harga tertinggi (long)
+  //   'tp1'   : keluar penuh di TP1
+  // [from, to): hanya isyarat dalam julat index ni yang diambil (untuk pecahan in-sample / out-of-sample).
+  function simulate(c, pre, o = {}) {
+    const n = c.length, fee = pre.fee, minGrade = o.minGrade || 'B', EXP = o.expiry || 12;
+    const manage = o.manage || 'split', from = Math.max(pre.start, o.from ?? 0), to = Math.min(n, o.to ?? n);
+    const gradeOk = (g) => g === 'A' || (minGrade === 'B' && g === 'B');
     const trades = [];
-    let pos = null, pend = null, evals = 0, signals = 0, missed = 0, expired = 0;
+    let pos = null, pend = null, signals = 0, missed = 0, expired = 0, evals = 0;
     const R = (px) => (pos.dir === 'long' ? px - pos.entry : pos.entry - px) / pos.risk;
     const close = (exit, i, why) => {
       const half = pos.half;
       const gross = half ? 0.5 * pos.r1 + 0.5 * R(exit) : R(exit);
       const cost = fee * (pos.entry + (half ? 0.5 * pos.tp + 0.5 * exit : exit)) / pos.risk;
       trades.push({ dir: pos.dir, grade: pos.grade, mode: pos.mode, confirm: pos.confirm, entryTime: pos.time, exitTime: c[i].time,
-        entry: pos.entry, exit, r: gross - cost, cost, why: half && why === 'sl' ? 'be' : why });
+        entry: pos.entry, exit, r: gross - cost, cost, why: half && why === 'sl' ? (pos.trailed ? 'trail' : 'be') : why });
       pos = null;
     };
     const open = (entry, i) => {
@@ -424,8 +460,11 @@ window.TD = window.TD || {};
       if (!(risk > 0) || (L ? entry >= pend.tp : entry <= pend.tp)) { missed++; pend = null; return; }
       pos = { ...pend, entry, risk, time: c[i].time, half: false }; pend = null;
     };
-    for (let i = start; i < n; i++) {
+    for (let i = from; i < n; i++) {
       const b = c[i];
+      // hardEnd: data mulai `to` tak boleh disentuh langsung (in-sample walk-forward):
+      // tutup posisi pada harga TUTUP candle terakhir SEBELUM garis pemisah
+      if (o.hardEnd && i >= to) { if (pos) close(c[to - 1].close, to - 1, 'end'); pend = null; break; }
       let limitFill = false;
       if (!pos && pend) {
         const L = pend.dir === 'long';
@@ -440,27 +479,23 @@ window.TD = window.TD || {};
         // limit terisi dalam candle ni: tak tahu sama ada TP berlaku sebelum atau selepas isian, jadi TP tak dikira (pesimis)
         else if (limitFill) { /* tunggu candle seterusnya */ }
         else if (!pos.half && (L ? b.high >= pos.tp : b.low <= pos.tp)) {
-          if (split && pos.tp2 != null) { pos.half = true; pos.r1 = R(pos.tp); pos.sl = pos.entry; }
+          if (manage === 'trail') { pos.half = true; pos.r1 = R(pos.tp); pos.sl = pos.entry; pos.ext = L ? b.high : b.low; }
+          else if (manage === 'split' && pos.tp2 != null) { pos.half = true; pos.r1 = R(pos.tp); pos.sl = pos.entry; }
           else close(pos.tp, i, 'tp');
-        } else if (pos.half && (L ? b.high >= pos.tp2 : b.low <= pos.tp2)) close(pos.tp2, i, 'tp2');
-      }
-      if (!pos && !pend && i < n - 1) {
-        evals++;
-        const tClose = b.time + curSec;
-        const htf = aggs.map(h => ({ tf: String(h.sec), info: closedInfo(h, tClose) }));
-        const btcInfo = btc ? closedInfo(btc, tClose) : null;
-        const p = plan(c.slice(Math.max(0, i - WIN + 1), i + 1), htf,
-          { spotOnly: !allowShort, feePct: fee * 100, requireConfirm: o.requireConfirm, btcDir: btcInfo ? btcInfo.dir : null });
-        if (p.verdict !== 'TUNGGU' && gradeOk(p.grade)) {
-          signals++;
-          pend = { dir: p.dir, entry: p.entry, sl: p.sl, tp: p.tp1, tp2: p.tp2, at: i, grade: p.grade, mode: p.mode, confirm: !!p.confirm, market: !!p.market };
+        } else if (pos.half && manage === 'split' && (L ? b.high >= pos.tp2 : b.low <= pos.tp2)) close(pos.tp2, i, 'tp2');
+        else if (pos.half && manage === 'trail') {
+          // SL candle ni dah disemak di atas; kemas kini trailing untuk candle SETERUSNYA (tiada intai)
+          pos.ext = L ? Math.max(pos.ext, b.high) : Math.min(pos.ext, b.low);
+          const t = L ? pos.ext - 1.5 * pos.atr : pos.ext + 1.5 * pos.atr;
+          if (L ? t > pos.sl : t < pos.sl) { pos.sl = t; pos.trailed = true; }
         }
       }
-      if (o.yieldEvery && i % o.yieldEvery === 0) {
-        await new Promise(r => setTimeout(r, 0));
-        if (o.onProgress) o.onProgress((i - start) / Math.max(1, n - start));
-        if (o.cancelled && o.cancelled()) return null;
+      if (!pos && !pend && i < to && i < n - 1) {
+        evals++;
+        const s = pre.sigs[i];
+        if (s && gradeOk(s.grade)) { signals++; pend = { ...s, at: i }; }
       }
+      if (!pos && !pend && i >= to) break;
     }
     // prestasi ikut kumpulan (gred & jenis setup): jawab "bila analisis cakap gred A, berapa kerap ia betul?"
     const groups = {};
@@ -469,8 +504,47 @@ window.TD = window.TD || {};
       groups[key] = { n: g.n, winRate: g.winRate, expectancy: g.expectancy, totalR: g.totalR };
     }
     return { trades, ...stats(trades), groups, open: pos || pend ? 1 : 0, evals, signals, missed, expired,
-      from: c[start]?.time, to: c[n - 1]?.time, feePct: fee * 100, strat: 'plan', minGrade, manage: split ? 'split' : 'tp1', requireConfirm: !!o.requireConfirm,
-      buyHoldPct: n > start ? (c[n - 1].close / c[start].close - 1) * 100 : 0 };
+      from: c[from]?.time, to: c[Math.min(n, to) - 1]?.time, feePct: fee * 100, strat: 'plan', minGrade, manage,
+      buyHoldPct: n > from ? (c[Math.min(n, to) - 1].close / c[from].close - 1) * 100 : 0 };
+  }
+
+  async function backtestPlan(c, curSec, htfSecs, o = {}) {
+    const pre = await precomputeSignals(c, curSec, htfSecs, o);
+    if (!pre) return null;
+    return { ...simulate(c, pre, o), requireConfirm: !!o.requireConfirm };
+  }
+
+  // ---------- pengoptimum WALK-FORWARD ----------
+  // Cari tetapan terbaik guna 70% data awal (in-sample), kemudian uji pada 30% terakhir (out-of-sample)
+  // yang tak pernah dilihat semasa carian. Tetapan cuma DITERIMA kalau ia bertahan pada data baru tu.
+  const OPT_SIG = []; for (const slBuf of [0.3, 0.5, 0.8]) for (const minRR of [1.5, 2]) for (const requireConfirm of [false, true]) OPT_SIG.push({ slBuf, minRR, requireConfirm });
+  const OPT_SIM = []; for (const manage of ['split', 'trail', 'tp1']) for (const minGrade of ['B', 'A']) OPT_SIM.push({ manage, minGrade });
+  async function optimize(c, curSec, htfSecs, o = {}) {
+    const n = c.length, start = Math.min(n, 260), cut = Math.floor(start + (n - start) * 0.7);
+    const rows = [];
+    for (let k = 0; k < OPT_SIG.length; k++) {
+      const sg = OPT_SIG[k];
+      const pre = await precomputeSignals(c, curSec, htfSecs, { ...o, ...sg,
+        onProgress: (f) => o.onProgress && o.onProgress((k + f) / OPT_SIG.length) });
+      if (!pre) return null;
+      for (const sm of OPT_SIM) {
+        rows.push({ ...sg, ...sm, is: simulate(c, pre, { ...sm, to: cut, hardEnd: true }), oos: simulate(c, pre, { ...sm, from: cut }) });
+      }
+    }
+    const isDefault = (r) => r.slBuf === 0.5 && r.minRR === 1.5 && r.requireConfirm === !!o.defaultConfirm && r.manage === 'split' && r.minGrade === 'B';
+    const def = rows.find(isDefault);
+    // skor in-sample: purata R × √n (macam t-stat), supaya sampel kecil yang "bernasib baik" tak menang
+    const score = (s) => s.expectancy * Math.sqrt(s.n);
+    const eligible = rows.filter(r => r.is.n >= 15 && r.is.expectancy > 0 && r.is.firstHalfR > 0 && r.is.secondHalfR > 0);
+    eligible.sort((a, b) => score(b.is) - score(a.is));
+    const best = eligible[0] || null;
+    let verdict = 'none';
+    if (best) {
+      const beatsDefault = !def || !def.oos.n || best.oos.expectancy >= def.oos.expectancy;
+      verdict = best.oos.n >= 8 && best.oos.expectancy > 0 && beatsDefault ? 'accept' : 'reject';
+    }
+    return { rows, def, best, verdict, top: eligible.slice(0, 5), tested: rows.length,
+      isFrom: c[start]?.time, cutTime: c[cut]?.time, oosTo: c[n - 1]?.time };
   }
 
   // ---------- Monte Carlo: susun semula hasil trade secara rawak ribuan kali ----------
@@ -507,5 +581,5 @@ window.TD = window.TD || {};
     return { level: 'good', text: `Ada tanda edge: untung pada kedua-dua separuh tempoh, profit factor ${bt.profitFactor.toFixed(2)}. Langkah seterusnya: forward test di akaun demo sekurang-kurangnya 30 trade sebelum duit sebenar.` };
   }
 
-  TD.ana = { pivots, structure, zones, divergence, confirmation, trendInfo, plan, aggregate, backtest, backtestPlan, monteCarlo, stats, judge, STRATS };
+  TD.ana = { pivots, structure, zones, divergence, confirmation, trendInfo, plan, aggregate, backtest, backtestPlan, precomputeSignals, simulate, optimize, monteCarlo, stats, judge, STRATS };
 })();
