@@ -13,9 +13,9 @@
   <link rel="icon" type="image/png" href="icons/icon-192.png">
   <title>TradeDesk</title>
   <link rel="preconnect" href="https://www.okx.com" crossorigin>
-  <link rel="stylesheet" href="css/style.css?v=12">
+  <link rel="stylesheet" href="css/style.css?v=13">
   <!-- Mula minta data candle SEKARANG, sementara skrip chart yang besar masih dimuat turun dan diproses. -->
-  <script src="js/feeds.js?v=12"></script>
+  <script src="js/feeds.js?v=13"></script>
   <script>
     try {
       var st = JSON.parse(localStorage.getItem('tradedesk.v2') || '{}');
@@ -191,6 +191,8 @@
         <div class="tab-body hidden" data-body="journal">
           <div class="ph"><b>Jurnal</b><button class="btn small ghost" id="btnClearJournal">Padam</button></div>
           <div id="stats" class="stats"></div>
+          <div id="coachOut" class="list"></div>
+          <h4>Sejarah trade</h4>
           <div id="journalList" class="list"></div>
         </div>
 
@@ -265,9 +267,10 @@
   <div id="toasts" class="toasts"></div>
 
   <script src="lib/lightweight-charts.standalone.production.js?v=5.3.0"></script>
-  <script src="js/indicators.js?v=12"></script>
-  <script src="js/analysis.js?v=12"></script>
-  <script src="js/drawings.js?v=12"></script>
-  <script src="js/app.js?v=12"></script>
+  <script src="js/indicators.js?v=13"></script>
+  <script src="js/analysis.js?v=13"></script>
+  <script src="js/coach.js?v=13"></script>
+  <script src="js/drawings.js?v=13"></script>
+  <script src="js/app.js?v=13"></script>
 </body>
 </html>

@@ -74,6 +74,17 @@ Analisis berasaskan peraturan, ikut cara trader berpengalaman berfikir. **Bukan 
 - **Trailing stop**: 50% di TP1, baki diikut 1.5 ATR dari harga ekstrem; disokong dalam backtest DAN setup live
 - **Backtest sejarah panjang** (≈3000 candle, OKX/Binance) dan **perbandingan 4 cara pelaksanaan** (limit vs pengesahan × 50% TP1+BE vs penuh di TP1), dengan amaran overfitting
 
+## Coach (tab Jurnal): analisis ke atas pelaksanaan trader
+
+Kebanyakan akaun hilang duit bukan sebab analisis salah, tapi sebab pelaksanaan. Tab Jurnal ukur:
+
+- **Skor disiplin 0–100**: ikut sistem (30), risiko sekata (25), biar pelan yang tutup (25), satu timeframe (20), dengan satu fokus pembaikan
+- **Saiz risiko tak sekata**: jumlah R lawan P/L sebenar, dan P/L "kalau risiko sama". Terangkan kenapa R untung tapi duit rugi (kalah dengan risiko lebih besar dari menang)
+- **Tutup manual lawan ikut pelan**: untuk setiap trade yang ditutup manual, ulang tayang candle sebenar SELEPAS masa tutup dengan peraturan pengurusan yang sama (SL dulu, 50% TP1, BE/TP2/trailing) dan kira R yang tertinggal atau terselamat
+- **Ikut sistem lawan luar sistem**: prestasi trade ikut sistem, pelan diubah, masuk walaupun TUNGGU, dan tanpa analisis
+- **Prestasi ikut timeframe**
+- **Pengawal**: pengesahan bila menyimpan setup yang analisisnya TUNGGU; amaran bila saiz risiko atau timeframe berbeza dari kebiasaan; pengesahan bila menutup manual trade yang sedang untung sebelum TP1 (dengan rekod tutup awal kau sendiri)
+
 ## Prestasi
 
 Diukur pada CPU phone simulasi (4x lebih perlahan), latency rangkaian 250 ms:

@@ -467,7 +467,7 @@
     }
   });
   function positionToSetup(d) {
-    S.draft = { ...S.draft, dir: d.type, type: 'limit', entry: roundP(d.pts[0].p), sl: roundP(d.sl), tp1: roundP(d.tp), tp2: null, note: S.draft.note || `${d.type === 'long' ? 'Long' : 'Short'} position tool` };
+    S.draft = { ...S.draft, src: null, trail: null, dir: d.type, type: 'limit', entry: roundP(d.pts[0].p), sl: roundP(d.sl), tp1: roundP(d.tp), tp2: null, note: S.draft.note || `${d.type === 'long' ? 'Long' : 'Short'} position tool` };
     syncDraftInputs(); drawLines(); renderCalc(); switchTab('setup', true);
     toast('Setup dari position tool', 'Semak nilai di panel Setup, kemudian tekan "Simpan & pantau".', 'info');
   }
@@ -576,7 +576,7 @@
       S.candles = r.candles; S.candlesKey = cacheKey(); S.stale = false;
       buildLegend(); afterLoad(); openKline(gen);
       saveCandleCache();
-      if (changed) { allSymbols = null; restartTickers(true); }
+      if (changed) { allSymbols = null; restartTickers(true); computeWhatIf(); }
     } catch (e) {
       if (gen !== feedGen) return;
       if (e.notFound) {
@@ -977,6 +977,24 @@
     if (S.dailyR > 0 && tr <= -S.dailyR) {
       if (!confirm(`Hari ni kau dah rugi ${tr.toFixed(2)}R (had harian ${S.dailyR}R).\n\nTrader berpengalaman berhenti bila sampai had. Selepas beberapa kali rugi, keputusan biasanya dipengaruhi emosi.\n\nTetap nak simpan setup ni?`)) return;
     }
+    // Coach: masuk walaupun analisis cakap TUNGGU?
+    const cls = TD.coach.classify({ src: d.src, note: d.note });
+    if (cls === 'tunggu') {
+      const rec = TD.coach.groupStats(S.setups.filter(x => x.status === 'closed' && x.r != null && TD.coach.classify(x) === 'tunggu'), () => 'x')[0];
+      if (!confirm(`Analisis cakap TUNGGU (gred ${d.src ? d.src.grade : '?'}) untuk setup ni.\n\nMasuk juga bermaksud trade LUAR sistem.${rec ? ` Rekod kau setakat ni untuk trade macam ni: ${rec.n} trade, purata ${fmtR(rec.expectancy)}.` : ''}\n\nTetap nak simpan?`)) return;
+    }
+    // Coach: saiz risiko berubah berbanding kebiasaan → menang kecil, kalah besar
+    const curRisk = S.balance * S.riskPct / 100;
+    const recent = S.setups.slice(0, 15).map(x => x.riskUsd).filter(x => x > 0);
+    const medRisk = TD.coach.median(recent);
+    if (medRisk && recent.length >= 3 && Math.abs(curRisk / medRisk - 1) > 0.25) {
+      toast('Saiz risiko berubah', `Risiko setup ni ${fmtUsd(curRisk)}, tapi kebiasaan kau ${fmtUsd(medRisk)}. Bila risiko berubah-ubah, untung dalam R boleh jadi rugi dalam duit. Kekalkan risiko yang sama setiap trade.`, 'bad');
+    }
+    // Coach: timeframe berbeza dari kebiasaan
+    const tfs = TD.coach.groupStats(S.setups.slice(0, 15), x => x.interval);
+    if (tfs.length && tfs[0].n >= 3 && tfs[0].key !== S.interval) {
+      toast('Timeframe berbeza', `Kebanyakan trade kau di ${tfs[0].key}, tapi setup ni di ${S.interval}. Rekod bercampur timeframe susah dinilai.`, 'info');
+    }
     // Pengawal pendedahan: pair crypto bergerak hampir serentak, jadi beberapa setup sama arah ≈ satu pertaruhan besar
     const exp = openRisk();
     const sameDir = S.setups.filter(x => isOpen(x) && x.dir === d.dir && x.symbol !== S.symbol && riskLeft(x) > 0);
@@ -988,12 +1006,12 @@
     const px = priceOf(S.symbol);
     const s = {
       id: uid(), symbol: S.symbol, interval: S.interval, dir: d.dir, entry, sl: d.sl, origSl: d.sl, tp1: d.tp1, tp2: d.tp2,
-      be: d.be, trail: d.trail || null, note: d.note, riskUsd: S.balance * S.riskPct / 100, createdAt: Date.now(),
+      be: d.be, trail: d.trail || null, note: d.note, src: d.src || null, riskUsd: S.balance * S.riskPct / 100, createdAt: Date.now(),
       status: d.type === 'market' ? 'active' : 'pending', trigger: entry <= px ? 'below' : 'above',
     };
     if (s.status === 'active') s.filledAt = Date.now();
     S.setups.unshift(s);
-    S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null, note: '', trail: null };
+    S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null, note: '', trail: null, src: null };
     persist(); syncDraftInputs(); drawLines(); renderCalc(); renderOpen(); restartTickers();
     toast('Setup disimpan', `${s.dir.toUpperCase()} ${s.symbol} — ${s.status === 'active' ? 'aktif sekarang' : 'menunggu harga ' + fmt(entry)}.`, 'good');
     switchTab('open', true);
@@ -1010,7 +1028,7 @@
     const entry = c.close, L = side === 'long';
     const sl = L ? entry - 1.5 * a : entry + 1.5 * a, risk = Math.abs(entry - sl);
     S.draft = {
-      ...S.draft, dir: side, type: 'limit', entry: roundP(entry), sl: roundP(sl),
+      ...S.draft, src: null, trail: null, dir: side, type: 'limit', entry: roundP(entry), sl: roundP(sl),
       tp1: roundP(L ? entry + 1.5 * risk : entry - 1.5 * risk), tp2: roundP(L ? entry + 3 * risk : entry - 3 * risk),
       note: `Auto: ${L ? 'trend naik' : 'trend turun'} (EMA200), SL 1.5×ATR, TP 1.5R / 3R`,
     };
@@ -1105,9 +1123,22 @@
       <div class="grid"><div>Entry<b>${fmt(s.entry, d)}</b></div><div>SL<b class="neg">${fmt(s.sl, d)}</b></div><div>TP1<b class="pos">${fmt(s.tp1, d)}</b></div><div>TP2<b class="pos">${s.tp2 ? fmt(s.tp2, d) : '—'}</b></div></div>
       ${closed ? (s.r != null ? `<div class="pnl ${s.r >= 0 ? 'pos' : 'neg'}">${fmtR(s.r)} · ${fmtUsd(s.pnl)} <span class="muted">${date}</span></div>` : `<div class="muted" style="margin-top:6px">${date}</div>`)
         : `<div class="pnl" data-live="${s.id}"></div>`}
+      ${closed && s.status === 'closed' ? coachLine(s) : ''}
       ${s.note ? `<div class="note">${esc(s.note)}</div>` : ''}
       ${!closed ? `<div class="acts">${s.status === 'active' ? `<button class="btn small" data-act="close">Tutup sekarang</button>` : ''}<button class="btn small ghost" data-act="cancel">${s.status === 'active' ? 'Buang' : 'Batal'}</button></div>` : ''}
     </div>`;
+  }
+  // baris coach pada kad jurnal: jenis trade, risiko, dan "kalau ikut pelan" untuk tutup manual
+  function coachLine(s) {
+    const k = TD.coach.classify(s);
+    const tag = { sistem: '✓ ikut sistem', diubah: '✎ pelan diubah', tunggu: '⚠ masuk walaupun TUNGGU', luar: '• tanpa analisis' }[k];
+    let w = '';
+    if (s.outcome === 'manual' && s.whatIf) {
+      const diff = s.whatIf.r - s.r;
+      const st = { tp: 'kena TP', tp2: 'kena TP2', sl: 'kena SL', be: 'keluar BE', trail: 'trailing', open: 'masih berjalan' }[s.whatIf.status];
+      w = ` · kalau ikut pelan: <b class="${s.whatIf.r >= 0 ? 'pos' : 'neg'}">${fmtR(s.whatIf.r)}</b> (${st}, ${diff > 0 ? 'tertinggal' : 'terselamat'} ${Math.abs(diff).toFixed(2)}R)`;
+    }
+    return `<div class="muted coachline"><span class="${k === 'sistem' ? 'pos' : k === 'tunggu' ? 'neg' : ''}">${tag}</span> · risiko ${fmtUsd(s.riskUsd)}${w}</div>`;
   }
   // risiko yang masih terdedah bagi satu setup, dalam R (0 bila SL dah di breakeven atau lebih baik)
   function riskLeft(s) {
@@ -1167,6 +1198,82 @@
       ['Jumlah R', fmtR(totalR)], ['P/L', fmtUsd(totalPnl)], ['Batal', done.length - traded.length],
     ].map(([k, v]) => `<div class="stat"><b>${v}</b><span>${k}</span></div>`).join('');
     $('#journalList').innerHTML = done.length ? done.slice(0, 100).map(s => setupCard(s, true)).join('') : '<div class="empty">Jurnal kosong. Setup yang selesai akan masuk sini.</div>';
+    renderCoach(traded);
+    computeWhatIf();
+  }
+
+  // ================= COACH: analisis pelaksanaan trader =================
+  const CO = TD.coach;
+  // ringkasan tutup awal: berapa R beza antara apa yang diambil dan apa pelan akan bagi
+  function earlyExitSummary() {
+    const xs = S.setups.filter(s => s.status === 'closed' && s.outcome === 'manual' && s.r != null && s.whatIf && s.whatIf.r != null);
+    if (!xs.length) return null;
+    const took = xs.reduce((a, s) => a + s.r, 0), plan = xs.reduce((a, s) => a + s.whatIf.r, 0);
+    return { n: xs.length, took, plan, diff: plan - took, open: xs.filter(s => s.whatIf.status === 'open').length };
+  }
+  // ulang tayang pelan selepas tutup manual (guna sejarah harga sebenar); disimpan dalam setup
+  let whatIfBusy = false;
+  async function computeWhatIf() {
+    if (whatIfBusy || S.demo || !feed) return;
+    const due = S.setups.filter(s => s.status === 'closed' && s.outcome === 'manual' && s.r != null &&
+      (!s.whatIf || (s.whatIf.status === 'open' && Date.now() - s.whatIf.calcAt > (INTERVAL_SEC[s.interval] || 3600) * 1000)));
+    if (!due.length) return;
+    whatIfBusy = true;
+    let changed = false;
+    try {
+      for (const s of due.slice(0, 12)) {
+        const c = await getHTF(s.interval, s.symbol);
+        const w = c ? CO.replayPlan(s, c, INTERVAL_SEC[s.interval]) : null;
+        if (w) { s.whatIf = { ...w, calcAt: Date.now() }; changed = true; }
+      }
+    } finally { whatIfBusy = false; }
+    if (changed) { persist(); renderJournal(); }
+  }
+  function renderCoach(traded) {
+    const el = $('#coachOut'); if (!el) return;
+    if (!traded.length) { el.innerHTML = ''; return; }
+    const d = CO.discipline(traded);
+    const rr = CO.riskReport(traded);
+    const byClass = CO.groupStats(traded, t => CO.classify(t));
+    const byTf = CO.groupStats(traded, t => t.interval);
+    const ee = earlyExitSummary();
+    const cls = d.score >= 80 ? 'good' : d.score >= 55 ? 'info' : 'bad';
+    const row = (name, g) => `<tr><td>${esc(name)}</td><td>${g.n}</td><td>${g.winRate.toFixed(0)}%</td><td class="${g.expectancy >= 0 ? 'pos' : 'neg'}">${fmtR(g.expectancy)}</td><td class="${g.pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(g.pnl)}</td></tr>`;
+    let html = `<div class="card ana-verdict ${cls}"><div class="v">🧭 Skor disiplin: ${d.score}/100${d.n < 10 ? ` <span class="muted">(${d.n} trade, awal lagi)</span>` : ''}</div>
+      <div class="ana-kv">${d.parts.map(p => `<span>${esc(p.name)}</span><b class="${p.score === p.max ? 'pos' : p.score < p.max / 2 ? 'neg' : ''}">${p.score}/${p.max}</b>`).join('')}</div>
+      ${d.tip ? `<div class="rec-j ${cls === 'good' ? 'good' : 'warn'}">👉 Fokus seterusnya: ${esc(d.tip)}</div>` : '<div class="rec-j good">Pelaksanaan kau ikut pelan. Teruskan, dan biar statistik yang bercakap.</div>'}</div>`;
+    // risiko tak sekata
+    if (rr && !rr.consistent) {
+      html += `<div class="card"><div class="hd"><b>💸 Saiz risiko tak sekata</b><span class="muted">${fmtUsd(rr.min)} – ${fmtUsd(rr.max)}</span></div>
+        <div class="ana-kv">
+          <span>Jumlah R</span><b class="${rr.totalR >= 0 ? 'pos' : 'neg'}">${fmtR(rr.totalR)}</b>
+          <span>P/L sebenar</span><b class="${rr.pnl >= 0 ? 'pos' : 'neg'}">${fmtUsd(rr.pnl)}</b>
+          <span>Kalau risiko sama (${fmtUsd(rr.median)})</span><b class="${rr.pnlIfConstant >= 0 ? 'pos' : 'neg'}">${fmtUsd(rr.pnlIfConstant)}</b>
+          ${rr.avgRiskWin != null && rr.avgRiskLoss != null ? `<span>Risiko purata: menang / kalah</span><b class="${rr.avgRiskLoss > rr.avgRiskWin * 1.25 ? 'neg' : ''}">${fmtUsd(rr.avgRiskWin)} / ${fmtUsd(rr.avgRiskLoss)}</b>` : ''}
+        </div>
+        <p class="muted" style="margin:6px 0 0">${rr.totalR > 0 && rr.pnl < 0 ? 'Inilah sebab R untung tapi duit rugi: trade yang kalah guna risiko lebih besar dari trade yang menang. ' : ''}${rr.off.length} trade luar saiz biasa. Kunci risiko pada satu nilai (contohnya 1% modal) dan jangan ubah.</p></div>`;
+    }
+    // tutup awal
+    if (ee) {
+      html += `<div class="card"><div class="hd"><b>✂ Tutup manual lawan ikut pelan</b><span class="muted">${ee.n} trade</span></div>
+        <div class="ana-kv">
+          <span>Yang kau ambil</span><b class="${ee.took >= 0 ? 'pos' : 'neg'}">${fmtR(ee.took)}</b>
+          <span>Kalau ikut pelan</span><b class="${ee.plan >= 0 ? 'pos' : 'neg'}">${fmtR(ee.plan)}${ee.open ? ` <span class="muted">(${ee.open} masih berjalan)</span>` : ''}</b>
+          <span>Beza</span><b class="${ee.diff > 0 ? 'neg' : 'pos'}">${ee.diff > 0 ? 'tertinggal ' : 'terselamat '}${Math.abs(ee.diff).toFixed(2)}R ≈ ${fmtUsd(Math.abs(ee.diff) * (rr ? rr.median : 0))}</b>
+        </div>
+        <p class="muted" style="margin:6px 0 0">Dikira dengan harga sebenar selepas trade ditutup, guna peraturan pengurusan yang sama (SL dulu, 50% di TP1, BE/TP2). ${ee.diff > 0.5 ? 'Tutup awal sedang memakan untung kau: biar pelan yang tutup.' : ee.diff < -0.5 ? 'Setakat ni tutup awal menyelamatkan kau, tapi sampel kecil: jangan jadikan tabiat.' : ''}</p></div>`;
+    }
+    // ikut sistem lawan luar sistem
+    html += `<div class="card"><div class="hd"><b>🧩 Ikut sistem lawan luar sistem</b></div>
+      <table class="cmp"><thead><tr><th>Jenis</th><th>Trade</th><th>Menang</th><th>Purata</th><th>P/L</th></tr></thead>
+      <tbody>${byClass.map(g => row(CO.CLASS_TXT[g.key] || g.key, g)).join('')}</tbody></table>
+      <p class="muted" style="margin:6px 0 0">Cuma trade "Ikut sistem" yang menguji sistem. Trade lain menguji naluri: kalau prestasinya lebih teruk, berhenti buat.</p></div>`;
+    if (byTf.length > 1) {
+      html += `<div class="card"><div class="hd"><b>⏱ Ikut timeframe</b></div>
+        <table class="cmp"><thead><tr><th>TF</th><th>Trade</th><th>Menang</th><th>Purata</th><th>P/L</th></tr></thead>
+        <tbody>${byTf.map(g => row(g.key, g)).join('')}</tbody></table></div>`;
+    }
+    el.innerHTML = html;
   }
   function switchTab(t, forceOpen) {
     if (t === S.sideTab && !forceOpen && !S.sideCollapsed) S.sideCollapsed = true;
@@ -1175,6 +1282,8 @@
     $$('#rail button').forEach(b => b.classList.toggle('on', b.dataset.tab === S.sideTab && !S.sideCollapsed));
     $$('.tab-body').forEach(b => b.classList.toggle('hidden', b.dataset.body !== S.sideTab));
     renderUi();
+    // jurnal: kira "kalau ikut pelan" bila data dah sedia (semasa app mula, sambungan data belum siap)
+    if (S.sideTab === 'journal' && !S.sideCollapsed && typeof computeWhatIf === 'function') computeWhatIf();
     if (S.sideTab === 'ana' && !S.sideCollapsed && typeof scheduleAnalysis === 'function') {
       scheduleAnalysis();
       // kira semula ujian ke hadapan sekali-sekala (bila dah lebih satu candle sejak kiraan terakhir)
@@ -1365,7 +1474,7 @@
     sym = sym.toUpperCase();
     if (sym === S.symbol) return;
     S.symbol = sym; persist(); renderWatch(); setPick(null);
-    S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null };
+    S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null, src: null, trail: null };
     syncDraftInputs(); renderCalc(); loadSymbol(); restartTickers();
   }
   function addWatch(s) { if (!S.watch.includes(s)) { S.watch.push(s); persist(); renderWatch(); restartTickers(); } }
@@ -1378,7 +1487,7 @@
 
   $('#rail').addEventListener('click', e => { const b = e.target.closest('button'); if (b) switchTab(b.dataset.tab); });
   $('#btnSuggest').onclick = () => suggestSetup();
-  $('#dirSeg').addEventListener('click', e => { const d = e.target.dataset.dir; if (d) { S.draft.dir = d; syncDraftInputs(); renderCalc(); } });
+  $('#dirSeg').addEventListener('click', e => { const d = e.target.dataset.dir; if (d) { if (S.draft.src && d !== S.draft.dir) S.draft.src.edited = true; S.draft.dir = d; syncDraftInputs(); renderCalc(); } });
   $('#typeSeg').addEventListener('click', e => {
     const t = e.target.dataset.type; if (!t) return;
     S.draft.type = t;
@@ -1386,14 +1495,18 @@
     syncDraftInputs(); drawLines(); renderCalc();
   });
   [['#fEntry', 'entry'], ['#fSl', 'sl'], ['#fTp1', 'tp1'], ['#fTp2', 'tp2']].forEach(([sel, k]) => {
-    $(sel).addEventListener('input', e => { S.draft[k] = num(e.target.value); drawLines(); renderCalc(); });
+    $(sel).addEventListener('input', e => {
+      S.draft[k] = num(e.target.value);
+      if (S.draft.src) S.draft.src.edited = true; // pelan analisis diubah sendiri
+      drawLines(); renderCalc();
+    });
   });
   $('#fBE').onchange = e => { S.draft.be = e.target.checked; };
   $('#fNote').oninput = e => { S.draft.note = e.target.value; };
   $$('.pick[data-pick]').forEach(b => b.onclick = () => setPick(S.pick === b.dataset.pick ? null : b.dataset.pick));
   $('#btnNow').onclick = () => { if (priceOf(S.symbol) == null) return; S.draft.entry = roundP(priceOf(S.symbol)); syncDraftInputs(); drawLines(); renderCalc(); };
   $('#btnSave').onclick = saveDraft;
-  $('#btnClear').onclick = () => { S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null, note: '', trail: null }; syncDraftInputs(); drawLines(); renderCalc(); };
+  $('#btnClear').onclick = () => { S.draft = { ...S.draft, entry: null, sl: null, tp1: null, tp2: null, note: '', trail: null, src: null }; syncDraftInputs(); drawLines(); renderCalc(); };
 
   document.body.addEventListener('click', e => {
     const go = e.target.closest('[data-go]'); if (go) { goSymbol(go.dataset.go); return; }
@@ -1402,6 +1515,12 @@
       const s = S.setups.find(x => x.id === actBtn.closest('.card').dataset.id); if (!s) return;
       if (actBtn.dataset.act === 'close') {
         const px = priceOf(s.symbol); if (px == null) return;
+        // Coach: tutup untung awal? Tunjuk sasaran pelan & rekod tutup awal sebelum ni
+        const rNow = liveR(s, px), rTp1 = rAt(s, s.tp1);
+        if (rNow != null && rNow > 0 && !s.tp1Hit) {
+          const left = earlyExitSummary();
+          if (!confirm(`Tutup sekarang pada ${fmtR(rNow)}?\n\nSasaran pelan: TP1 ${fmtR(rTp1)}${s.tp2 ? ', kemudian TP2' : ''}. SL masih melindungi trade ni.${left && left.n ? `\n\nRekod kau: ${left.n} trade ditutup awal sebelum ni, ${left.diff >= 0 ? 'tertinggal' : 'terselamat'} ${Math.abs(left.diff).toFixed(2)}R berbanding ikut pelan.` : ''}\n\nTetap tutup?`)) return;
+        }
         closeSetup(s, px, 'manual');
         notify(`Setup ditutup · ${s.symbol}`, `Manual @ ${fmt(px, decOf(s.symbol))} (${fmtR(s.r)} / ${fmtUsd(s.pnl)})`, s.r >= 0 ? 'good' : 'bad');
       } else if (actBtn.dataset.act === 'cancel') {
@@ -1691,7 +1810,9 @@
     if (p.symbol !== S.symbol) return;
     const mg = (tunedFor() || {}).manage || 'split';
     S.draft = { ...S.draft, dir: p.dir, type: 'limit', entry: roundP(p.entry), sl: roundP(p.sl), tp1: roundP(p.tp1), tp2: mg === 'split' ? roundP(p.tp2) : null, be: mg !== 'tp1', trail: mg === 'trail' && p.info ? +(1.5 * p.info.atr).toPrecision(6) : null,
-      note: `${tunedFor() ? '[Ditala] ' : ''}Analisis auto: ${p.verdict}, gred ${p.grade} (${p.score}/7), bias ${p.bias}${p.htf?.length ? ' ikut ' + p.htf.map(h => h.tf).join('/') : ''}` };
+      note: `${tunedFor() ? '[Ditala] ' : ''}Analisis auto: ${p.verdict}, gred ${p.grade} (${p.score}/7), bias ${p.bias}${p.htf?.length ? ' ikut ' + p.htf.map(h => h.tf).join('/') : ''}`,
+      // asal setup (untuk coach): keputusan analisis semasa pelan dimuat
+      src: { verdict: p.verdict, grade: p.grade, score: p.score, mode: p.mode, tuned: !!tunedFor(), edited: false } };
     syncDraftInputs(); drawLines(); renderCalc(); switchTab('setup', true);
     toast('Pelan dimuat ke Setup', 'Semak nilai, kemudian tekan "Simpan & pantau".', 'info');
   });
@@ -2154,5 +2275,5 @@
     window.addEventListener('load', () => navigator.serviceWorker.register('sw.js').catch(() => {}));
   }
 
-  window.TradeDesk = { S, chart, drawings, onPrice, onKline, suggestSetup, refreshNow, _ind: () => indRT, get mainSeries() { return mainSeries; } };
+  window.TradeDesk = { S, chart, drawings, onPrice, onKline, suggestSetup, refreshNow, renderOpen, renderJournal, _ind: () => indRT, get mainSeries() { return mainSeries; } };
 })();

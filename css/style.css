@@ -320,3 +320,5 @@ textarea { background: var(--bg); border: 1px solid var(--line); border-radius: 
   .tab-body { overflow: visible; }
   .toasts { left: 16px; right: 16px; max-width: none; }
 }
+.coachline { margin-top: 4px; font-size: 12px; }
+.coachline b { font-weight: 600; }
